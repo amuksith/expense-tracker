@@ -7,15 +7,11 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.Crossfade
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -28,19 +24,17 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.ui.semantics.Role
-import androidx.compose.material.icons.filled.ArrowForward
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.automirrored.filled.ReceiptLong
 import androidx.compose.material.icons.filled.PieChart
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Clear
-import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.SearchOff
-import androidx.compose.material.icons.filled.ReceiptLong
 import androidx.compose.material3.*
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.DateRangePicker
@@ -57,7 +51,6 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.amuksith.expensetracker.data.AccountEntity
 import com.amuksith.expensetracker.data.ExpenseEntity
@@ -65,20 +58,15 @@ import com.amuksith.expensetracker.data.TransactionType
 import com.amuksith.expensetracker.data.preferences.CurrencyManager
 import com.amuksith.expensetracker.utils.BackupExportManager
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeout
-import kotlinx.coroutines.TimeoutCancellationException
-import kotlinx.coroutines.Dispatchers
-import android.content.Context
-import android.widget.Toast
 import java.text.SimpleDateFormat
 import java.util.*
 
-private val ExpenseItemDateFormat = SimpleDateFormat("MMM dd, yyyy", Locale.getDefault())
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun DashboardScreen(viewModel: ExpenseViewModel) {
+fun DashboardScreen(
+    viewModel: ExpenseViewModel,
+    onNavigateToAbout: () -> Unit = {}
+) {
     val expenses by viewModel.expenses.collectAsStateWithLifecycle()
     val filteredExpenses by viewModel.filteredExpenses.collectAsStateWithLifecycle()
     val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
@@ -120,8 +108,9 @@ fun DashboardScreen(viewModel: ExpenseViewModel) {
     var showBudgetsDialog by remember { mutableStateOf(false) }
     var editingAccount by remember { mutableStateOf<AccountEntity?>(null) }
     var deletingAccount by remember { mutableStateOf<AccountEntity?>(null) }
-    var selectedTab by remember { mutableStateOf(0) } // 0: Transactions, 1: Analytics
-    var analyticsMode by remember { mutableStateOf(0) } // 0: Expenses, 1: Income
+    var transactionPendingDelete by remember { mutableStateOf<ExpenseEntity?>(null) }
+    var selectedTab by remember { mutableIntStateOf(0) } // 0: Transactions, 1: Analytics
+    var analyticsMode by remember { mutableIntStateOf(0) } // 0: Expenses, 1: Income
 
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
@@ -191,7 +180,8 @@ fun DashboardScreen(viewModel: ExpenseViewModel) {
                 currentCurrencySymbol = currentCurrencySymbol,
                 collapseFraction = collapseFraction,
                 onCurrencyClick = { showCurrencyDialog = true },
-                onBackupClick = { showBackupDialog = true }
+                onBackupClick = { showBackupDialog = true },
+                onAboutClick = onNavigateToAbout
             )
             
             FinancialOverviewCard(
@@ -265,7 +255,7 @@ fun DashboardScreen(viewModel: ExpenseViewModel) {
                             shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
                             icon = {
                                 SegmentedButtonDefaults.Icon(selectedTab == 0) {
-                                    Icon(Icons.Default.List, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Icon(Icons.AutoMirrored.Filled.List, contentDescription = null, modifier = Modifier.size(18.dp))
                                 }
                             }
                         ) {
@@ -332,12 +322,15 @@ fun DashboardScreen(viewModel: ExpenseViewModel) {
                                 var expanded by remember { mutableStateOf(false) }
                                 var showCustomDatePicker by remember { mutableStateOf(false) }
                                 
-                                val dateLabel = if (selectedDateFilter == TransactionDateFilter.CUSTOM && customDateRange.first != null && customDateRange.second != null) {
-                                    val startStr = SimpleDateFormat("MMM dd", Locale.getDefault()).format(Date(customDateRange.first!!))
-                                    val endStr = SimpleDateFormat("MMM dd", Locale.getDefault()).format(Date(customDateRange.second!!))
-                                    "$startStr - $endStr"
-                                } else {
-                                    selectedDateFilter.label
+                                val dateLabel = remember(selectedDateFilter, customDateRange) {
+                                    if (selectedDateFilter == TransactionDateFilter.CUSTOM && customDateRange.first != null && customDateRange.second != null) {
+                                        val formatter = SimpleDateFormat("MMM dd", Locale.getDefault())
+                                        val startStr = formatter.format(Date(customDateRange.first!!))
+                                        val endStr = formatter.format(Date(customDateRange.second!!))
+                                        "$startStr - $endStr"
+                                    } else {
+                                        selectedDateFilter.label
+                                    }
                                 }
 
                                 Box {
@@ -473,7 +466,7 @@ fun DashboardScreen(viewModel: ExpenseViewModel) {
                                 }
                             } else {
                                 Icon(
-                                    imageVector = Icons.Default.ReceiptLong,
+                                    imageVector = Icons.AutoMirrored.Filled.ReceiptLong,
                                     contentDescription = "No transactions yet",
                                     modifier = Modifier.size(64.dp),
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
@@ -499,58 +492,60 @@ fun DashboardScreen(viewModel: ExpenseViewModel) {
                         key = { "tx_${it.id}" },
                         contentType = { "transaction" }
                     ) { expense ->
+                        @Suppress("DEPRECATION")
                         val dismissState = rememberSwipeToDismissBoxState(
-                        confirmValueChange = {
-                            if (it == SwipeToDismissBoxValue.EndToStart) {
-                                viewModel.deleteExpense(expense)
-                                true
-                            } else {
-                                false
+                            confirmValueChange = {
+                                if (it == SwipeToDismissBoxValue.EndToStart) {
+                                    transactionPendingDelete = expense
+                                    false
+                                } else {
+                                    false
+                                }
                             }
-                        }
-                    )
+                        )
 
-                    SwipeToDismissBox(
-                        state = dismissState,
-                        enableDismissFromStartToEnd = false,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                        backgroundContent = {
-                            val color = if (dismissState.targetValue == SwipeToDismissBoxValue.EndToStart) {
-                                MaterialTheme.colorScheme.error
-                            } else {
-                                Color.Transparent
-                            }
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .background(color, RoundedCornerShape(12.dp))
-                                    .padding(end = 16.dp),
-                                contentAlignment = Alignment.CenterEnd
-                            ) {
-                                if (dismissState.targetValue == SwipeToDismissBoxValue.EndToStart) {
-                                    Icon(
-                                        Icons.Default.Delete,
-                                        contentDescription = "Delete",
-                                        tint = MaterialTheme.colorScheme.onError
-                                    )
+                        SwipeToDismissBox(
+                            state = dismissState,
+                            enableDismissFromStartToEnd = false,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                            backgroundContent = {
+                                val isSwiping = dismissState.targetValue == SwipeToDismissBoxValue.EndToStart || dismissState.dismissDirection == SwipeToDismissBoxValue.EndToStart
+                                val color = if (isSwiping) {
+                                    MaterialTheme.colorScheme.errorContainer
+                                } else {
+                                    Color.Transparent
                                 }
-                            }
-                        },
-                        content = {
-                            ExpenseItem(
-                                expense = expense,
-                                accounts = accounts,
-                                selectedAccountId = selectedAccountId,
-                                currencySymbol = currentCurrencySymbol,
-                                onClick = {
-                                    viewModel.setEditingExpense(expense)
-                                    showBottomSheet = true
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .background(color, RoundedCornerShape(12.dp))
+                                        .padding(end = 16.dp),
+                                    contentAlignment = Alignment.CenterEnd
+                                ) {
+                                    if (isSwiping) {
+                                        Icon(
+                                            Icons.Default.Delete,
+                                            contentDescription = "Delete",
+                                            tint = MaterialTheme.colorScheme.onErrorContainer
+                                        )
+                                    }
                                 }
-                            )
-                        }
-                    )
+                            },
+                            content = {
+                                ExpenseItem(
+                                    expense = expense,
+                                    accounts = accounts,
+                                    selectedAccountId = selectedAccountId,
+                                    currencySymbol = currentCurrencySymbol,
+                                    onClick = {
+                                        viewModel.setEditingExpense(expense)
+                                        showBottomSheet = true
+                                    }
+                                )
+                            }
+                        )
+                    }
                 }
-                } // Closes the 'else' of 'if (filteredExpenses.isEmpty())'
             } else {
                 analyticsItems(
                     selectedPeriod = selectedPeriod,
@@ -806,7 +801,7 @@ fun DashboardScreen(viewModel: ExpenseViewModel) {
                         }
 
                         // Option 2: Move Remaining Balance Only
-                        if (remainingBalance != 0.0 || linkedCount == 0) {
+                        if (remainingBalance != 0.0) {
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -936,6 +931,29 @@ fun DashboardScreen(viewModel: ExpenseViewModel) {
                 }
             )
         }
+    }
+
+    transactionPendingDelete?.let { tx ->
+        AlertDialog(
+            onDismissRequest = { transactionPendingDelete = null },
+            title = { Text("Delete Transaction?") },
+            text = { Text("Are you sure you want to delete '${tx.title}'? This will update your wallet balance.") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.deleteExpense(tx)
+                        transactionPendingDelete = null
+                    }
+                ) {
+                    Text("Delete", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { transactionPendingDelete = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 
     if (showBackupDialog) {
@@ -1217,7 +1235,6 @@ fun WalletCard(
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ExpenseItem(
     expense: ExpenseEntity,
@@ -1226,7 +1243,7 @@ fun ExpenseItem(
     currencySymbol: String,
     onClick: () -> Unit = {}
 ) {
-    val dateString = remember(expense.date) { ExpenseItemDateFormat.format(Date(expense.date)) }
+    val dateString = remember(expense.date) { SimpleDateFormat("MMM dd, yyyy", Locale.getDefault()).format(Date(expense.date)) }
     val isTransfer = expense.type == TransactionType.TRANSFER
 
     val categoryColor = if (isTransfer) Color(0xFF009688) else CategoryUtils.getCategoryColor(expense.category)
@@ -1245,20 +1262,25 @@ fun ExpenseItem(
             amountColor = MaterialTheme.colorScheme.error
         }
         TransactionType.TRANSFER -> {
-            if (selectedAccountId == null) {
-                amountText = formatCurrency(expense.amount, currencySymbol)
-                amountColor = MaterialTheme.colorScheme.tertiary
-            } else if (selectedAccountId == expense.accountId) {
-                // Sender
-                amountText = formatCurrency(expense.amount, currencySymbol, "-")
-                amountColor = Color(0xFFFF5722)
-            } else if (selectedAccountId == expense.toAccountId) {
-                // Receiver
-                amountText = formatCurrency(expense.amount, currencySymbol, "+")
-                amountColor = Color(0xFF4CAF50)
-            } else {
-                amountText = formatCurrency(expense.amount, currencySymbol)
-                amountColor = MaterialTheme.colorScheme.tertiary
+            when (selectedAccountId) {
+                null -> {
+                    amountText = formatCurrency(expense.amount, currencySymbol)
+                    amountColor = MaterialTheme.colorScheme.tertiary
+                }
+                expense.accountId -> {
+                    // Sender
+                    amountText = formatCurrency(expense.amount, currencySymbol, "-")
+                    amountColor = Color(0xFFFF5722)
+                }
+                expense.toAccountId -> {
+                    // Receiver
+                    amountText = formatCurrency(expense.amount, currencySymbol, "+")
+                    amountColor = Color(0xFF4CAF50)
+                }
+                else -> {
+                    amountText = formatCurrency(expense.amount, currencySymbol)
+                    amountColor = MaterialTheme.colorScheme.tertiary
+                }
             }
         }
     }
@@ -1342,7 +1364,7 @@ fun ExpenseItem(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AddExpenseBottomSheet(
     editingExpense: ExpenseEntity? = null,
@@ -1508,7 +1530,7 @@ fun AddExpenseBottomSheet(
             Spacer(modifier = Modifier.height(24.dp))
 
             val isTransferInvalid = selectedType == TransactionType.TRANSFER && selectedAccountId == selectedToAccountId
-            val isTitleValid = if (selectedType == TransactionType.TRANSFER) true else title.isNotBlank()
+            val isTitleValid = selectedType == TransactionType.TRANSFER || title.isNotBlank()
             val isAmountValid = amount.toDoubleOrNull() != null
 
             Button(
@@ -1531,7 +1553,6 @@ fun AddExpenseBottomSheet(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun WalletSelector(accounts: List<AccountEntity>, selectedId: Int, onSelected: (Int) -> Unit) {
     FlowRow(

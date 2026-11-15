@@ -159,10 +159,18 @@ fun LazyListScope.analyticsItems(
                     Text(
                         text = "Monthly Budgets (This Month)",
                         style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.weight(1f).padding(end = 8.dp)
                     )
-                    TextButton(onClick = onManageBudgetsClick) {
-                        Text(if (budgetProgressList.isEmpty()) "Set Budgets" else "Edit")
+                    TextButton(
+                        onClick = onManageBudgetsClick,
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                    ) {
+                        Text(
+                            text = if (budgetProgressList.isEmpty()) "Set Budgets" else "Edit",
+                            maxLines = 1,
+                            softWrap = false
+                        )
                     }
                 }
 

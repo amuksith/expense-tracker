@@ -1,5 +1,8 @@
 package com.amuksith.expensetracker.ui
 
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyListState
@@ -24,6 +27,8 @@ import androidx.compose.ui.unit.lerp
 import androidx.compose.ui.unit.sp
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.outlined.Info
 
 @Stable
 class FluidHeaderState(
@@ -41,40 +46,29 @@ fun rememberFluidHeaderState(
         with(density) { collapseDistance.toPx() }
     }
 
-    var collapseOffsetPx by remember { mutableFloatStateOf(0f) }
-
-    val collapseFraction = (collapseOffsetPx / maxCollapsePx).coerceIn(0f, 1f)
-
-    val nestedScrollConnection = remember(maxCollapsePx, listState) {
-        object : NestedScrollConnection {
-            override fun onPreScroll(
-                available: Offset,
-                source: NestedScrollSource
-            ): Offset {
-                val delta = available.y
-
-                // Collapse header before LazyColumn scrolls (scrolling up)
-                if (delta < 0f && collapseOffsetPx < maxCollapsePx) {
-                    val newOffset = (collapseOffsetPx - delta).coerceIn(0f, maxCollapsePx)
-                    val consumed = collapseOffsetPx - newOffset
-                    collapseOffsetPx = newOffset
-                    return Offset(0f, consumed)
-                }
-
-                // Expand header only when LazyColumn is at the top (scrolling down)
-                if (delta > 0f &&
-                    listState.firstVisibleItemIndex == 0 &&
-                    listState.firstVisibleItemScrollOffset == 0 &&
-                    collapseOffsetPx > 0f) {
-                    val newOffset = (collapseOffsetPx - delta).coerceIn(0f, maxCollapsePx)
-                    val consumed = collapseOffsetPx - newOffset
-                    collapseOffsetPx = newOffset
-                    return Offset(0f, consumed)
-                }
-
-                return Offset.Zero
+    val rawCollapseFraction by remember(listState, maxCollapsePx) {
+        derivedStateOf {
+            if (maxCollapsePx <= 0f) {
+                0f
+            } else if (listState.firstVisibleItemIndex > 0) {
+                1f
+            } else {
+                (listState.firstVisibleItemScrollOffset / maxCollapsePx).coerceIn(0f, 1f)
             }
         }
+    }
+
+    val collapseFraction by animateFloatAsState(
+        targetValue = rawCollapseFraction,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioNoBouncy,
+            stiffness = Spring.StiffnessMediumLow
+        ),
+        label = "collapseFraction"
+    )
+
+    val nestedScrollConnection = remember {
+        object : NestedScrollConnection {}
     }
 
     return remember(collapseFraction, nestedScrollConnection) {
@@ -87,7 +81,8 @@ fun FluidHeaderTitleRow(
     currentCurrencySymbol: String,
     collapseFraction: Float,
     onCurrencyClick: () -> Unit,
-    onBackupClick: () -> Unit = {}
+    onBackupClick: () -> Unit = {},
+    onAboutClick: () -> Unit = {}
 ) {
     val headerHeight = lerp(56.dp, 38.dp, collapseFraction)
 
@@ -133,15 +128,41 @@ fun FluidHeaderTitleRow(
                     )
                 }
 
-                IconButton(
-                    onClick = onBackupClick,
-                    enabled = collapseFraction < 0.3f,
-                    modifier = Modifier.size(32.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.MoreVert,
-                        contentDescription = "Backup & Export options"
-                    )
+                var expanded by remember { mutableStateOf(false) }
+
+                Box {
+                    IconButton(
+                        onClick = { expanded = true },
+                        enabled = collapseFraction < 0.3f,
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.MoreVert,
+                            contentDescription = "More options"
+                        )
+                    }
+
+                    DropdownMenu(
+                        expanded = expanded,
+                        onDismissRequest = { expanded = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("Backup & Restore") },
+                            leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null) },
+                            onClick = {
+                                expanded = false
+                                onBackupClick()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("About") },
+                            leadingIcon = { Icon(Icons.Outlined.Info, contentDescription = null) },
+                            onClick = {
+                                expanded = false
+                                onAboutClick()
+                            }
+                        )
+                    }
                 }
             }
         }
