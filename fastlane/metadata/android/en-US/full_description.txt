@@ -1,0 +1,9 @@
+Expense Tracker is an open-source Android app for managing your everyday finances offline. Track what you earn and spend, keep separate balances for cash and bank accounts, and see how much of your monthly budget you’ve used.
+
+- Record income and expenses and organize transactions by category.
+- Manage multiple wallets and see each wallet’s balance alongside your combined balance.
+- Move money between wallets without changing your income or expense totals.
+- Set monthly budgets by category and review your spending with charts and summaries.
+- Back up your records to a local JSON file and restore them when needed.
+
+Your financial records are stored on your device. You can use Expense Tracker without an internet connection.

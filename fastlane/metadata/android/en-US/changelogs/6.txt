@@ -1,0 +1,5 @@
+- Initial public release on IzzyOnDroid (v1.5.0)
+- 100% offline personal finance and multi-wallet tracking
+- Double-entry wallet transfers and safe wallet deletion modes
+- Monthly category budgets and native visual analytics
+- Local JSON and CSV backup/restore support
