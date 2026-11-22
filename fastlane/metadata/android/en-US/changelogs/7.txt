@@ -1,0 +1,4 @@
+- Add support for recurring transactions and rules management
+- Add automated schedule calculations for daily, weekly, monthly, and yearly recurring expenses
+- Add unit tests for recurring transactions and expense logic
+- Performance and stability fixes for offline database operations

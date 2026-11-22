@@ -5,9 +5,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material3.Scaffold
-import androidx.compose.ui.Modifier
 import com.amuksith.expensetracker.data.AppDatabase
 import com.amuksith.expensetracker.data.ExpenseRepository
 import com.amuksith.expensetracker.ui.DashboardScreen
@@ -25,6 +22,8 @@ import androidx.navigation3.runtime.NavEntry
 import androidx.navigation3.ui.NavDisplay
 import com.amuksith.expensetracker.ui.AboutRoute
 import com.amuksith.expensetracker.ui.AboutScreen
+import com.amuksith.expensetracker.ui.RecurringRulesRoute
+import com.amuksith.expensetracker.ui.RecurringRulesScreen
 import kotlinx.serialization.Serializable
 
 @Serializable
@@ -33,7 +32,13 @@ object DashboardRoute
 class MainActivity : ComponentActivity() {
 
     private val database by lazy { AppDatabase.getDatabase(this) }
-    private val repository by lazy { ExpenseRepository(database.expenseDao(), database.accountDao()) }
+    private val repository by lazy {
+        ExpenseRepository(
+            database.expenseDao(),
+            database.accountDao(),
+            database.recurringTransactionDao()
+        )
+    }
     private val currencyManager by lazy { com.amuksith.expensetracker.data.preferences.CurrencyManager(this) }
     private val budgetManager by lazy { com.amuksith.expensetracker.data.preferences.BudgetManager(this) }
     private val viewModel: ExpenseViewModel by viewModels {
@@ -66,11 +71,18 @@ class MainActivity : ComponentActivity() {
                             is DashboardRoute -> NavEntry(key) {
                                 DashboardScreen(
                                     viewModel = viewModel,
-                                    onNavigateToAbout = { backStack.add(AboutRoute) }
+                                    onNavigateToAbout = { backStack.add(AboutRoute) },
+                                    onNavigateToRecurringRules = { backStack.add(RecurringRulesRoute) }
                                 )
                             }
                             is AboutRoute -> NavEntry(key) {
                                 AboutScreen(
+                                    onNavigateBack = { if (backStack.size > 1) backStack.removeLastOrNull() }
+                                )
+                            }
+                            is RecurringRulesRoute -> NavEntry(key) {
+                                RecurringRulesScreen(
+                                    viewModel = viewModel,
                                     onNavigateBack = { if (backStack.size > 1) backStack.removeLastOrNull() }
                                 )
                             }

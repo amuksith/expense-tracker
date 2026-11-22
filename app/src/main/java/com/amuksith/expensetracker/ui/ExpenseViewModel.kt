@@ -4,11 +4,17 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.amuksith.expensetracker.data.AccountEntity
+import com.amuksith.expensetracker.data.ConfirmResult
 import com.amuksith.expensetracker.data.ExpenseEntity
 import com.amuksith.expensetracker.data.ExpenseRepository
+import com.amuksith.expensetracker.data.RecurrenceCustomUnit
+import com.amuksith.expensetracker.data.RecurrenceFrequency
+import com.amuksith.expensetracker.data.RecurringTransactionEntity
+import com.amuksith.expensetracker.data.SkipResult
 import com.amuksith.expensetracker.data.TransactionType
 import com.amuksith.expensetracker.data.preferences.CurrencyManager
 import com.amuksith.expensetracker.data.preferences.BudgetManager
+import com.amuksith.expensetracker.utils.RecurringScheduleManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -17,6 +23,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import java.time.LocalDate
 import java.util.Calendar
 
 enum class AnalyticsPeriod { THIS_MONTH, LAST_3_MONTHS, ALL_TIME }
@@ -76,6 +83,24 @@ class ExpenseViewModel(private val repository: ExpenseRepository, private val cu
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val allUnfilteredExpenses: StateFlow<List<ExpenseEntity>> = _allExpenses
+
+    val recurringRules: StateFlow<List<RecurringTransactionEntity>> = repository.allRecurringRules
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val currentTodayEpochDay = MutableStateFlow(RecurringScheduleManager.getCurrentTodayEpochDay())
+
+    fun refreshTodayEpochDay() {
+        currentTodayEpochDay.value = RecurringScheduleManager.getCurrentTodayEpochDay()
+    }
+
+    val dueOccurrences: StateFlow<List<RecurringTransactionEntity>> = combine(
+        recurringRules,
+        currentTodayEpochDay
+    ) { rules, _ ->
+        val now = System.currentTimeMillis()
+        rules.filter { it.getEffectiveDueTimestamp() <= now }
+            .sortedWith(compareBy({ it.getEffectiveDueTimestamp() }, { it.id }))
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val accountBalances: StateFlow<Map<Int, Double>> = combine(
         accounts,
@@ -391,14 +416,15 @@ class ExpenseViewModel(private val repository: ExpenseRepository, private val cu
         }
     }
 
-    fun addAccount(name: String, initialBalance: Double) {
+    fun addAccount(name: String, initialBalance: Double, onCreated: ((Int) -> Unit)? = null) {
         viewModelScope.launch {
-            repository.insertAccount(
+            val newId = repository.insertAccount(
                 AccountEntity(
                     name = name,
                     initialBalance = initialBalance
                 )
-            )
+            ).toInt()
+            onCreated?.invoke(newId)
         }
     }
 
@@ -418,6 +444,105 @@ class ExpenseViewModel(private val repository: ExpenseRepository, private val cu
     fun deleteExpense(expense: ExpenseEntity) {
         viewModelScope.launch {
             repository.delete(expense)
+        }
+    }
+
+    fun addRecurringRule(
+        title: String,
+        amount: Double,
+        category: String,
+        type: TransactionType,
+        accountId: Int,
+        toAccountId: Int? = null,
+        frequency: RecurrenceFrequency,
+        customIntervalCount: Int? = null,
+        customIntervalUnit: RecurrenceCustomUnit? = null,
+        startDateEpochDay: Long,
+        dueTimestamp: Long? = null,
+        notes: String? = null
+    ) {
+        if (type != TransactionType.TRANSFER && title.isBlank()) return
+        if (amount <= 0.0 || !amount.isFinite()) return
+        viewModelScope.launch {
+            val originalDay = LocalDate.ofEpochDay(startDateEpochDay).dayOfMonth
+            val finalTitle = if (title.isBlank() && type == TransactionType.TRANSFER) "Transfer" else title.trim()
+            val finalCategory = if (type == TransactionType.TRANSFER) "Transfer" else category
+            val rule = RecurringTransactionEntity(
+                title = finalTitle,
+                amount = amount,
+                category = finalCategory,
+                type = type,
+                accountId = accountId,
+                toAccountId = if (type == TransactionType.TRANSFER) toAccountId else null,
+                frequency = frequency,
+                customIntervalCount = if (frequency == RecurrenceFrequency.CUSTOM) customIntervalCount else null,
+                customIntervalUnit = if (frequency == RecurrenceFrequency.CUSTOM) customIntervalUnit else null,
+                nextDueEpochDay = startDateEpochDay,
+                originalMonthlyDay = originalDay,
+                revision = RecurringScheduleManager.generateFreshRevision(),
+                notes = notes?.trim()?.ifBlank { null },
+                dueTimestamp = dueTimestamp
+            )
+            repository.insertRecurringRule(rule)
+        }
+    }
+
+    fun updateRecurringRule(rule: RecurringTransactionEntity) {
+        if (rule.type != TransactionType.TRANSFER && rule.title.isBlank()) return
+        if (rule.amount <= 0.0 || !rule.amount.isFinite()) return
+        viewModelScope.launch {
+            val finalTitle = if (rule.title.isBlank() && rule.type == TransactionType.TRANSFER) "Transfer" else rule.title.trim()
+            val finalCategory = if (rule.type == TransactionType.TRANSFER) "Transfer" else rule.category
+            val updated = rule.copy(
+                title = finalTitle,
+                category = finalCategory,
+                toAccountId = if (rule.type == TransactionType.TRANSFER) rule.toAccountId else null
+            )
+            repository.updateRecurringRule(updated)
+        }
+    }
+
+    fun deleteRecurringRule(rule: RecurringTransactionEntity) {
+        viewModelScope.launch {
+            repository.deleteRecurringRule(rule)
+        }
+    }
+
+    fun confirmRecurringOccurrence(
+        rule: RecurringTransactionEntity,
+        selectedWalletId: Int,
+        selectedToWalletId: Int? = null,
+        onResult: (ConfirmResult) -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            refreshTodayEpochDay()
+            val today = currentTodayEpochDay.value
+            val res = repository.confirmOccurrence(
+                ruleId = rule.id,
+                expectedDueEpochDay = rule.nextDueEpochDay,
+                expectedRevision = rule.revision,
+                selectedWalletId = selectedWalletId,
+                selectedToWalletId = selectedToWalletId,
+                currentTodayEpochDay = today
+            )
+            onResult(res)
+        }
+    }
+
+    fun skipRecurringOccurrence(
+        rule: RecurringTransactionEntity,
+        onResult: (SkipResult) -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            refreshTodayEpochDay()
+            val today = currentTodayEpochDay.value
+            val res = repository.skipOccurrence(
+                ruleId = rule.id,
+                expectedDueEpochDay = rule.nextDueEpochDay,
+                expectedRevision = rule.revision,
+                currentTodayEpochDay = today
+            )
+            onResult(res)
         }
     }
 
@@ -524,9 +649,13 @@ class ExpenseViewModel(private val repository: ExpenseRepository, private val cu
         }
     }
 
-    fun replaceAllData(accounts: List<AccountEntity>, expenses: List<ExpenseEntity>) {
+    fun replaceAllData(
+        accounts: List<AccountEntity>,
+        expenses: List<ExpenseEntity>,
+        recurringRules: List<RecurringTransactionEntity> = emptyList()
+    ) {
         viewModelScope.launch {
-            repository.replaceAllData(accounts, expenses)
+            repository.replaceAllData(accounts, expenses, recurringRules)
         }
     }
 

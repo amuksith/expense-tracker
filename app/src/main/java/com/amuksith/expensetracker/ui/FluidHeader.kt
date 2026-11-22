@@ -25,10 +25,14 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.lerp
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.ui.draw.clip
 
 @Stable
 class FluidHeaderState(
@@ -82,7 +86,8 @@ fun FluidHeaderTitleRow(
     collapseFraction: Float,
     onCurrencyClick: () -> Unit,
     onBackupClick: () -> Unit = {},
-    onAboutClick: () -> Unit = {}
+    onAboutClick: () -> Unit = {},
+    onRecurringRulesClick: () -> Unit = {}
 ) {
     val headerHeight = lerp(56.dp, 38.dp, collapseFraction)
 
@@ -98,43 +103,62 @@ fun FluidHeaderTitleRow(
             text = "Expense Tracker",
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.Bold,
-            modifier = Modifier.graphicsLayer {
-                val scale = 1f - (collapseFraction * 0.18f)
-                scaleX = scale
-                scaleY = scale
-                transformOrigin = TransformOrigin(0f, 0.5f)
-            }
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier
+                .weight(1f, fill = false)
+                .graphicsLayer {
+                    val scale = 1f - (collapseFraction * 0.18f)
+                    scaleX = scale
+                    scaleY = scale
+                    transformOrigin = TransformOrigin(0f, 0.5f)
+                }
         )
+
+        Spacer(modifier = Modifier.width(8.dp))
 
         val pillAlpha = (1f - collapseFraction * 2.2f).coerceIn(0f, 1f)
 
         if (pillAlpha > 0.01f) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
                 modifier = Modifier.graphicsLayer { alpha = pillAlpha }
             ) {
                 Surface(
-                    shape = RoundedCornerShape(16.dp),
-                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    shape = RoundedCornerShape(20.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                     modifier = Modifier
+                        .clip(RoundedCornerShape(20.dp))
                         .clickable(enabled = collapseFraction < 0.3f) { onCurrencyClick() }
                 ) {
-                    Text(
-                        text = "[ $currentCurrencySymbol ▼ ]",
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Bold
-                    )
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text(
+                            text = currentCurrencySymbol.trim(),
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Icon(
+                            imageVector = Icons.Default.KeyboardArrowDown,
+                            contentDescription = "Select Currency",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
                 }
 
                 var expanded by remember { mutableStateOf(false) }
 
-                Box {
+                Box(contentAlignment = Alignment.Center) {
                     IconButton(
                         onClick = { expanded = true },
-                        enabled = collapseFraction < 0.3f,
-                        modifier = Modifier.size(32.dp)
+                        enabled = collapseFraction < 0.3f
                     ) {
                         Icon(
                             imageVector = Icons.Default.MoreVert,
@@ -146,6 +170,14 @@ fun FluidHeaderTitleRow(
                         expanded = expanded,
                         onDismissRequest = { expanded = false }
                     ) {
+                        DropdownMenuItem(
+                            text = { Text("Scheduled") },
+                            leadingIcon = { Icon(Icons.Default.Repeat, contentDescription = null) },
+                            onClick = {
+                                expanded = false
+                                onRecurringRulesClick()
+                            }
+                        )
                         DropdownMenuItem(
                             text = { Text("Backup & Restore") },
                             leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null) },

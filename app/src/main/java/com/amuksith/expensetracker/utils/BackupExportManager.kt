@@ -4,6 +4,10 @@ import android.content.Context
 import android.net.Uri
 import com.amuksith.expensetracker.data.AccountEntity
 import com.amuksith.expensetracker.data.ExpenseEntity
+import com.amuksith.expensetracker.data.MISSING_WALLET_ID
+import com.amuksith.expensetracker.data.RecurrenceCustomUnit
+import com.amuksith.expensetracker.data.RecurrenceFrequency
+import com.amuksith.expensetracker.data.RecurringTransactionEntity
 import com.amuksith.expensetracker.data.TransactionType
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -71,7 +75,8 @@ object BackupExportManager {
         currencyCode: String,
         accounts: List<AccountEntity>,
         expenses: List<ExpenseEntity>,
-        budgets: Map<String, Double> = emptyMap()
+        budgets: Map<String, Double> = emptyMap(),
+        recurringRules: List<RecurringTransactionEntity> = emptyList()
     ): Boolean = withContext(Dispatchers.IO) {
         try {
             val root = JSONObject()
@@ -113,6 +118,28 @@ object BackupExportManager {
             }
             root.put("budgets", budgetsObj)
 
+            val rulesArray = JSONArray()
+            for (rule in recurringRules) {
+                val ruleObj = JSONObject()
+                ruleObj.put("id", rule.id)
+                ruleObj.put("title", rule.title)
+                ruleObj.put("amount", rule.amount)
+                ruleObj.put("category", rule.category)
+                ruleObj.put("type", rule.type.name)
+                ruleObj.put("accountId", rule.accountId)
+                if (rule.toAccountId != null) ruleObj.put("toAccountId", rule.toAccountId)
+                ruleObj.put("frequency", rule.frequency.name)
+                if (rule.customIntervalCount != null) ruleObj.put("customIntervalCount", rule.customIntervalCount)
+                if (rule.customIntervalUnit != null) ruleObj.put("customIntervalUnit", rule.customIntervalUnit.name)
+                ruleObj.put("nextDueEpochDay", rule.nextDueEpochDay)
+                if (rule.dueTimestamp != null) ruleObj.put("dueTimestamp", rule.dueTimestamp)
+                ruleObj.put("originalMonthlyDay", rule.originalMonthlyDay)
+                ruleObj.put("revision", rule.revision)
+                if (rule.notes != null) ruleObj.put("notes", rule.notes)
+                rulesArray.put(ruleObj)
+            }
+            root.put("recurringRules", rulesArray)
+
             context.contentResolver.openOutputStream(uri)?.use { outputStream ->
                 OutputStreamWriter(outputStream).use { writer ->
                     writer.write(root.toString(2))
@@ -125,7 +152,15 @@ object BackupExportManager {
         }
     }
 
-    data class RestoreResult(val success: Boolean, val message: String, val accounts: List<AccountEntity>? = null, val expenses: List<ExpenseEntity>? = null, val currencyCode: String? = null, val budgets: Map<String, Double>? = null)
+    data class RestoreResult(
+        val success: Boolean,
+        val message: String,
+        val accounts: List<AccountEntity>? = null,
+        val expenses: List<ExpenseEntity>? = null,
+        val currencyCode: String? = null,
+        val budgets: Map<String, Double>? = null,
+        val recurringRules: List<RecurringTransactionEntity>? = null
+    )
 
     suspend fun restoreFullBackupFromJson(context: Context, uri: Uri): RestoreResult = withContext(Dispatchers.IO) {
         try {
@@ -212,7 +247,66 @@ object BackupExportManager {
                 }
             }
 
-            RestoreResult(true, "Restored ${parsedAccounts.size} wallets and ${parsedExpenses.size} transactions successfully.", parsedAccounts, parsedExpenses, currencyCode, parsedBudgets)
+            val parsedRecurringRules = mutableListOf<RecurringTransactionEntity>()
+            if (root.has("recurringRules")) {
+                val rulesArray = root.getJSONArray("recurringRules")
+                for (i in 0 until rulesArray.length()) {
+                    val ruleObj = rulesArray.getJSONObject(i)
+
+                    val typeStr = ruleObj.getString("type")
+                    val type = try { TransactionType.valueOf(typeStr) } catch(_: Exception) { TransactionType.EXPENSE }
+
+                    val freqStr = ruleObj.getString("frequency")
+                    val frequency = try { RecurrenceFrequency.valueOf(freqStr) } catch(_: Exception) { RecurrenceFrequency.MONTHLY }
+
+                    val customIntervalCount = if (ruleObj.has("customIntervalCount") && !ruleObj.isNull("customIntervalCount")) ruleObj.getInt("customIntervalCount") else null
+                    val customIntervalUnit = if (ruleObj.has("customIntervalUnit") && !ruleObj.isNull("customIntervalUnit")) {
+                        try { RecurrenceCustomUnit.valueOf(ruleObj.getString("customIntervalUnit")) } catch(_: Exception) { null }
+                    } else null
+
+                    val rawAccountId = ruleObj.getInt("accountId")
+                    val resolvedAccountId = if (validAccountIds.contains(rawAccountId)) rawAccountId else MISSING_WALLET_ID
+
+                    val rawToAccountId = if (ruleObj.has("toAccountId") && !ruleObj.isNull("toAccountId")) ruleObj.getInt("toAccountId") else null
+                    val resolvedToAccountId = if (rawToAccountId != null) {
+                        if (validAccountIds.contains(rawToAccountId)) rawToAccountId else MISSING_WALLET_ID
+                    } else null
+
+                    val nextDueEpochDay = ruleObj.getLong("nextDueEpochDay")
+                    val dueTimestamp = if (ruleObj.has("dueTimestamp") && !ruleObj.isNull("dueTimestamp")) ruleObj.getLong("dueTimestamp") else null
+                    val originalMonthlyDay = if (ruleObj.has("originalMonthlyDay")) ruleObj.getInt("originalMonthlyDay") else 1
+
+                    parsedRecurringRules.add(
+                        RecurringTransactionEntity(
+                            id = ruleObj.getInt("id"),
+                            title = ruleObj.getString("title"),
+                            amount = ruleObj.getDouble("amount"),
+                            category = ruleObj.getString("category"),
+                            type = type,
+                            accountId = resolvedAccountId,
+                            toAccountId = resolvedToAccountId,
+                            frequency = frequency,
+                            customIntervalCount = customIntervalCount,
+                            customIntervalUnit = customIntervalUnit,
+                            nextDueEpochDay = nextDueEpochDay,
+                            originalMonthlyDay = originalMonthlyDay,
+                            revision = RecurringScheduleManager.generateFreshRevision(),
+                            notes = if (ruleObj.has("notes") && !ruleObj.isNull("notes")) ruleObj.getString("notes") else null,
+                            dueTimestamp = dueTimestamp
+                        )
+                    )
+                }
+            }
+
+            RestoreResult(
+                success = true,
+                message = "Restored ${parsedAccounts.size} wallets, ${parsedExpenses.size} transactions, and ${parsedRecurringRules.size} recurring rules successfully.",
+                accounts = parsedAccounts,
+                expenses = parsedExpenses,
+                currencyCode = currencyCode,
+                budgets = parsedBudgets,
+                recurringRules = parsedRecurringRules
+            )
         } catch (e: Exception) {
             e.printStackTrace()
             RestoreResult(false, "Failed to restore backup: ${e.message}")

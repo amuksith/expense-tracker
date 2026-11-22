@@ -11,11 +11,18 @@ class CurrencyManager(context: Context) {
     companion object {
         const val KEY_CURRENCY_CODE = "currency_code"
         val currencies = listOf(
-            CurrencyItem("LKR", "Rs. ", "Sri Lankan Rupee (Rs.)"),
             CurrencyItem("USD", "$", "US Dollar ($)"),
             CurrencyItem("EUR", "€", "Euro (€)"),
+            CurrencyItem("JPY", "¥", "Japanese Yen (¥)"),
             CurrencyItem("GBP", "£", "British Pound (£)"),
-            CurrencyItem("INR", "₹", "Indian Rupee (₹)")
+            CurrencyItem("CNY", "¥", "Chinese Yuan (CNY / ¥)"),
+            CurrencyItem("CAD", "CA$", "Canadian Dollar (CA$)"),
+            CurrencyItem("AUD", "A$", "Australian Dollar (A$)"),
+            CurrencyItem("INR", "₹", "Indian Rupee (₹)"),
+            CurrencyItem("LKR", "Rs. ", "Sri Lankan Rupee (Rs.)"),
+            CurrencyItem("CHF", "CHF", "Swiss Franc (CHF)"),
+            CurrencyItem("HKD", "HK$", "Hong Kong Dollar (HK$)"),
+            CurrencyItem("NZD", "NZ$", "New Zealand Dollar (NZ$)")
         )
     }
 

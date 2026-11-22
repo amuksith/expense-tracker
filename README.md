@@ -2,7 +2,7 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-v1.5.0-blue.svg?style=flat-square&logo=github)](https://github.com/amuksith/Expense-Tracker/releases)
+[![Version](https://img.shields.io/badge/Version-v1.6.1-blue.svg?style=flat-square&logo=github)](https://github.com/amuksith/Expense-Tracker/releases)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPLv3-green.svg?style=flat-square)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Android-3DDC84.svg?style=flat-square&logo=android&logoColor=white)](https://developer.android.com)
 [![Privacy](https://img.shields.io/badge/Privacy-100%25%20Offline-success.svg?style=flat-square&logo=adguard&logoColor=white)](#)
@@ -60,7 +60,7 @@
 
 ### 📦 Install the APK
 1. Visit the [**Releases**](../../releases) tab.
-2. Download the latest `v1.5.0` `.apk` asset.
+2. Download the latest `v1.6.1` `.apk` asset.
 3. Install directly on your Android device—no internet or special permissions required.
 
 ### 🔨 Build from Source

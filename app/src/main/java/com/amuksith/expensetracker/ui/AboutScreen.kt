@@ -10,8 +10,10 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.*
@@ -25,6 +27,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.semantics
@@ -371,10 +374,12 @@ fun AboutScreen(onNavigateBack: () -> Unit) {
     }
 
     if (showUpdateLog) {
+        val maxDialogHeight = (LocalConfiguration.current.screenHeightDp * 0.85).dp
         Dialog(onDismissRequest = { showUpdateLog = false }) {
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .heightIn(max = maxDialogHeight)
                     .padding(vertical = 16.dp),
                 shape = RoundedCornerShape(28.dp),
                 colors = CardDefaults.cardColors(
@@ -386,46 +391,57 @@ fun AboutScreen(onNavigateBack: () -> Unit) {
                         .fillMaxWidth()
                         .padding(24.dp)
                 ) {
-                    Text(
-                        text = "What's New in $appVersion 🎉",
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = "Squashed some pesky bugs, smoothed out animations, and polished the overall experience. — Yours, @amuksith",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
-                    val highlights = listOf(
-                        "Fluid Net Balance header with smooth scroll animations",
-                        "Seamless system gesture & predictive-back navigation",
-                        "Full-screen Open-Source Licenses viewer",
-                        "Automatic on-device crash log capture for bug reports",
-                        "Squashed layout bugs & improved all-around stability"
-                    )
-                    highlights.forEach { highlight ->
-                        Row(
-                            modifier = Modifier.padding(vertical = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                Icons.Default.CheckCircle,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(20.dp)
-                            )
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Text(
-                                text = highlight,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
+                    Column(
+                        modifier = Modifier
+                            .weight(1f, fill = false)
+                            .verticalScroll(rememberScrollState())
+                    ) {
+                        Text(
+                            text = "What's New in $appVersion 🎉",
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "Squashed some pesky bugs, put recurring transactions on the calendar, and gave your money more ways to show up. — Yours, @amuksith",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        val highlights = listOf(
+                            "New Scheduled screen to manage recurring transactions",
+                            "Schedule expenses, income, and wallet transfers",
+                            "Daily, weekly, monthly, and custom schedule options",
+                            "Expanded currency selection",
+                            "Improved the overall UI experience"
+                        )
+                        highlights.forEach { highlight ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 6.dp),
+                                verticalAlignment = Alignment.Top
+                            ) {
+                                Icon(
+                                    Icons.Default.CheckCircle,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier
+                                        .padding(top = 2.dp)
+                                        .size(20.dp)
+                                )
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Text(
+                                    text = highlight,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
                         }
                     }
-                    Spacer(modifier = Modifier.height(24.dp))
+                    Spacer(modifier = Modifier.height(20.dp))
                     Button(
                         onClick = { showUpdateLog = false },
                         modifier = Modifier.fillMaxWidth()

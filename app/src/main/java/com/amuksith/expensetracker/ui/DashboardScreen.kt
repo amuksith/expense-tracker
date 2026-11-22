@@ -3,10 +3,10 @@ package com.amuksith.expensetracker.ui
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
-import androidx.compose.animation.core.tween
 import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -16,56 +16,68 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.foundation.selection.selectable
-import androidx.compose.foundation.selection.selectableGroup
-import androidx.compose.ui.semantics.Role
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.CalendarToday
+import androidx.compose.material.icons.filled.Category
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.automirrored.filled.List
-import androidx.compose.material.icons.automirrored.filled.ReceiptLong
 import androidx.compose.material.icons.filled.PieChart
-import androidx.compose.material.icons.filled.SwapHoriz
+import androidx.compose.material.icons.filled.ReceiptLong
+import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Clear
-import androidx.compose.material.icons.filled.ArrowDropDown
-import androidx.compose.material.icons.filled.SearchOff
+import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.SwapHoriz
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
-import androidx.compose.material3.DatePickerDialog
-import androidx.compose.material3.DateRangePicker
-import androidx.compose.material3.rememberDateRangePickerState
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.amuksith.expensetracker.data.AccountEntity
+import com.amuksith.expensetracker.data.ConfirmResult
 import com.amuksith.expensetracker.data.ExpenseEntity
+import com.amuksith.expensetracker.data.MISSING_WALLET_ID
+import com.amuksith.expensetracker.data.RecurrenceFrequency
+import com.amuksith.expensetracker.data.RecurringTransactionEntity
+import com.amuksith.expensetracker.data.SkipResult
 import com.amuksith.expensetracker.data.TransactionType
 import com.amuksith.expensetracker.data.preferences.CurrencyManager
 import com.amuksith.expensetracker.utils.BackupExportManager
+import com.amuksith.expensetracker.utils.RecurringScheduleManager
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
+import java.time.LocalDate
 import java.util.*
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DashboardScreen(
     viewModel: ExpenseViewModel,
-    onNavigateToAbout: () -> Unit = {}
+    onNavigateToAbout: () -> Unit = {},
+    onNavigateToRecurringRules: () -> Unit = {}
 ) {
     val expenses by viewModel.expenses.collectAsStateWithLifecycle()
     val filteredExpenses by viewModel.filteredExpenses.collectAsStateWithLifecycle()
@@ -106,6 +118,7 @@ fun DashboardScreen(
     var showBackupDialog by remember { mutableStateOf(false) }
     var showRestoreConfirmDialog by remember { mutableStateOf(false) }
     var showBudgetsDialog by remember { mutableStateOf(false) }
+    var showCustomDateRangePicker by remember { mutableStateOf(false) }
     var editingAccount by remember { mutableStateOf<AccountEntity?>(null) }
     var deletingAccount by remember { mutableStateOf<AccountEntity?>(null) }
     var transactionPendingDelete by remember { mutableStateOf<ExpenseEntity?>(null) }
@@ -115,6 +128,19 @@ fun DashboardScreen(
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                viewModel.refreshTodayEpochDay()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
 
     val csvExportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/csv")) { uri ->
         if (uri != null) {
@@ -129,7 +155,15 @@ fun DashboardScreen(
         if (uri != null) {
             val currentCurrencyCode = CurrencyManager.currencies.find { it.symbol == currentCurrencySymbol }?.code ?: "USD"
             coroutineScope.launch {
-                val success = BackupExportManager.exportFullBackupToJson(context, uri, currentCurrencyCode, accounts, viewModel.allUnfilteredExpenses.value, categoryBudgets)
+                val success = BackupExportManager.exportFullBackupToJson(
+                    context = context,
+                    uri = uri,
+                    currencyCode = currentCurrencyCode,
+                    accounts = accounts,
+                    expenses = viewModel.allUnfilteredExpenses.value,
+                    budgets = categoryBudgets,
+                    recurringRules = viewModel.recurringRules.value
+                )
                 snackbarHostState.showSnackbar(if (success) "Backup saved successfully." else "Failed to save backup.")
             }
         }
@@ -140,7 +174,7 @@ fun DashboardScreen(
             coroutineScope.launch {
                 val result = BackupExportManager.restoreFullBackupFromJson(context, uri)
                 if (result.success && result.accounts != null && result.expenses != null) {
-                    viewModel.replaceAllData(result.accounts, result.expenses)
+                    viewModel.replaceAllData(result.accounts, result.expenses, result.recurringRules ?: emptyList())
                     if (result.currencyCode != null) {
                         viewModel.setCurrency(result.currencyCode)
                     }
@@ -181,7 +215,8 @@ fun DashboardScreen(
                 collapseFraction = collapseFraction,
                 onCurrencyClick = { showCurrencyDialog = true },
                 onBackupClick = { showBackupDialog = true },
-                onAboutClick = onNavigateToAbout
+                onAboutClick = onNavigateToAbout,
+                onRecurringRulesClick = onNavigateToRecurringRules
             )
             
             FinancialOverviewCard(
@@ -203,769 +238,371 @@ fun DashboardScreen(
                 )
             ) {
                 // Wallet Carousel
-            item(key = "wallet_carousel", contentType = "wallets") {
-                LazyRow(
-                    contentPadding = PaddingValues(horizontal = 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    item(key = "all_wallets") {
-                        WalletCard(
-                            name = "All Wallets",
-                            balance = accountBalances.values.sum(),
-                            currencySymbol = currentCurrencySymbol,
-                            isSelected = selectedAccountId == null,
-                            onClick = { viewModel.selectedAccountId.value = null }
-                        )
-                    }
-                    items(items = accounts, key = { "account_${it.id}" }) { account ->
-                        WalletCard(
-                            name = account.name,
-                            balance = accountBalances[account.id] ?: 0.0,
-                            currencySymbol = currentCurrencySymbol,
-                            isSelected = selectedAccountId == account.id,
-                            onClick = { viewModel.selectedAccountId.value = account.id },
-                            onEditClick = { editingAccount = account }
-                        )
-                    }
-                    item(key = "add_wallet") {
-                        WalletCard(
-                            name = "+ Add Wallet",
-                            balance = null,
-                            currencySymbol = currentCurrencySymbol,
-                            isSelected = false,
-                            onClick = { showAddWalletDialog = true }
-                        )
-                    }
-                }
-            }
-
-            item(key = "spacer_tabs", contentType = "spacer") {
-                Spacer(modifier = Modifier.height(12.dp))
-            }
-
-            // Tab Switcher
-            item(key = "tab_switcher", contentType = "tab_switcher") {
-                Box(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp).fillMaxWidth()) {
-                    SingleChoiceSegmentedButtonRow(
-                        modifier = Modifier.fillMaxWidth()
+                item(key = "wallet_carousel", contentType = "wallets") {
+                    LazyRow(
+                        contentPadding = PaddingValues(horizontal = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        SegmentedButton(
-                            selected = selectedTab == 0,
-                            onClick = { selectedTab = 0 },
-                            shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
-                            icon = {
-                                SegmentedButtonDefaults.Icon(selectedTab == 0) {
-                                    Icon(Icons.AutoMirrored.Filled.List, contentDescription = null, modifier = Modifier.size(18.dp))
-                                }
-                            }
-                        ) {
-                            Text("Transactions")
+                        item(key = "all_wallets") {
+                            WalletCard(
+                                name = "All Wallets",
+                                balance = accountBalances.values.sum(),
+                                currencySymbol = currentCurrencySymbol,
+                                isSelected = selectedAccountId == null,
+                                onClick = { viewModel.selectedAccountId.value = null }
+                            )
                         }
-                        SegmentedButton(
-                            selected = selectedTab == 1,
-                            onClick = { selectedTab = 1 },
-                            shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
-                            icon = {
-                                SegmentedButtonDefaults.Icon(selectedTab == 1) {
-                                    Icon(Icons.Default.PieChart, contentDescription = null, modifier = Modifier.size(18.dp))
-                                }
-                            }
-                        ) {
-                            Text("Analytics")
+                        items(items = accounts, key = { "account_${it.id}" }) { account ->
+                            WalletCard(
+                                name = account.name,
+                                balance = accountBalances[account.id] ?: 0.0,
+                                currencySymbol = currentCurrencySymbol,
+                                isSelected = selectedAccountId == account.id,
+                                onClick = { viewModel.selectedAccountId.value = account.id },
+                                onEditClick = { editingAccount = account }
+                            )
+                        }
+                        item(key = "add_wallet") {
+                            WalletCard(
+                                name = "+ Add Wallet",
+                                balance = null,
+                                currencySymbol = currentCurrencySymbol,
+                                isSelected = false,
+                                onClick = { showAddWalletDialog = true }
+                            )
                         }
                     }
                 }
-            }
 
-            item(key = "spacer_after_tabs", contentType = "spacer") {
-                Spacer(modifier = Modifier.height(8.dp))
-            }
+                item(key = "spacer_tabs", contentType = "spacer") {
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
 
-            if (selectedTab == 0) {
-                item(key = "search_and_filters", contentType = "filters") {
-                    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
-                        OutlinedTextField(
-                            value = searchQuery,
-                            onValueChange = { viewModel.searchQuery.value = it },
-                            placeholder = { Text("Search title, notes, category...") },
-                            leadingIcon = { Icon(Icons.Default.Search, "Search") },
-                            trailingIcon = {
-                                if (searchQuery.isNotEmpty()) {
-                                    IconButton(onClick = { viewModel.searchQuery.value = "" }) {
-                                        Icon(Icons.Default.Clear, "Clear search")
-                                    }
-                                }
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(12.dp),
-                            singleLine = true
-                        )
-                        
-                        Spacer(modifier = Modifier.height(8.dp))
-                        
-                        LazyRow(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                // Tab Switcher
+                item(key = "tab_switcher", contentType = "tab_switcher") {
+                    Box(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp).fillMaxWidth()) {
+                        SingleChoiceSegmentedButtonRow(
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            if (hasActiveFilters) {
-                                item {
-                                    FilterChip(
-                                        selected = true,
-                                        onClick = { viewModel.clearFilters() },
-                                        label = { Text("Clear Filters") },
-                                        leadingIcon = { Icon(Icons.Default.Clear, "Clear") }
-                                    )
-                                }
-                            }
-                            
-                            item {
-                                var expanded by remember { mutableStateOf(false) }
-                                var showCustomDatePicker by remember { mutableStateOf(false) }
-                                
-                                val dateLabel = remember(selectedDateFilter, customDateRange) {
-                                    if (selectedDateFilter == TransactionDateFilter.CUSTOM && customDateRange.first != null && customDateRange.second != null) {
-                                        val formatter = SimpleDateFormat("MMM dd", Locale.getDefault())
-                                        val startStr = formatter.format(Date(customDateRange.first!!))
-                                        val endStr = formatter.format(Date(customDateRange.second!!))
-                                        "$startStr - $endStr"
-                                    } else {
-                                        selectedDateFilter.label
+                            SegmentedButton(
+                                selected = selectedTab == 0,
+                                onClick = { selectedTab = 0 },
+                                shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+                                icon = {
+                                    SegmentedButtonDefaults.Icon(selectedTab == 0) {
+                                        Icon(Icons.AutoMirrored.Filled.List, contentDescription = null, modifier = Modifier.size(18.dp))
                                     }
                                 }
+                            ) {
+                                Text("Transactions")
+                            }
+                            SegmentedButton(
+                                selected = selectedTab == 1,
+                                onClick = { selectedTab = 1 },
+                                shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+                                icon = {
+                                    SegmentedButtonDefaults.Icon(selectedTab == 1) {
+                                        Icon(Icons.Default.PieChart, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    }
+                                }
+                            ) {
+                                Text("Analytics")
+                            }
+                        }
+                    }
+                }
 
+                if (selectedTab == 0) {
+                    item(key = "search_and_filters", contentType = "filters") {
+                        Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+                            OutlinedTextField(
+                                value = searchQuery,
+                                onValueChange = { viewModel.searchQuery.value = it },
+                                placeholder = { Text("Search title, notes, category...") },
+                                leadingIcon = { Icon(Icons.Default.Search, "Search") },
+                                trailingIcon = {
+                                    if (searchQuery.isNotEmpty()) {
+                                        IconButton(onClick = { viewModel.searchQuery.value = "" }) {
+                                            Icon(Icons.Default.Clear, "Clear search")
+                                        }
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(12.dp)
+                            )
+
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            OptInFlowRow {
+                                var dateMenuExpanded by remember { mutableStateOf(false) }
                                 Box {
                                     FilterChip(
                                         selected = selectedDateFilter != TransactionDateFilter.ALL_TIME,
-                                        onClick = { expanded = true },
-                                        label = { Text(dateLabel) },
-                                        trailingIcon = { Icon(Icons.Default.ArrowDropDown, "Dropdown") }
+                                        onClick = { dateMenuExpanded = true },
+                                        label = { Text(selectedDateFilter.label) },
+                                        trailingIcon = { Icon(Icons.Default.ArrowDropDown, contentDescription = null) },
+                                        leadingIcon = { Icon(Icons.Default.DateRange, contentDescription = null, modifier = Modifier.size(16.dp)) }
                                     )
-                                    DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+
+                                    DropdownMenu(
+                                        expanded = dateMenuExpanded,
+                                        onDismissRequest = { dateMenuExpanded = false }
+                                    ) {
                                         TransactionDateFilter.entries.forEach { filter ->
                                             DropdownMenuItem(
                                                 text = { Text(filter.label) },
-                                                onClick = { 
-                                                    viewModel.selectedDateFilter.value = filter
+                                                onClick = {
+                                                    dateMenuExpanded = false
                                                     if (filter == TransactionDateFilter.CUSTOM) {
-                                                        showCustomDatePicker = true
+                                                        showCustomDateRangePicker = true
+                                                    } else {
+                                                        viewModel.selectedDateFilter.value = filter
                                                     }
-                                                    expanded = false 
                                                 }
                                             )
                                         }
                                     }
                                 }
 
-                                if (showCustomDatePicker) {
-                                    val datePickerState = rememberDateRangePickerState(
-                                        initialSelectedStartDateMillis = customDateRange.first,
-                                        initialSelectedEndDateMillis = customDateRange.second
-                                    )
-                                    DatePickerDialog(
-                                        onDismissRequest = { 
-                                            showCustomDatePicker = false 
-                                            if (customDateRange.first == null) {
-                                                viewModel.selectedDateFilter.value = TransactionDateFilter.ALL_TIME
-                                            }
-                                        },
-                                        confirmButton = {
-                                            TextButton(onClick = {
-                                                viewModel.customDateRange.value = datePickerState.selectedStartDateMillis to datePickerState.selectedEndDateMillis
-                                                showCustomDatePicker = false
-                                            }) {
-                                                Text("Confirm")
-                                            }
-                                        },
-                                        dismissButton = {
-                                            TextButton(onClick = { 
-                                                showCustomDatePicker = false 
-                                                if (customDateRange.first == null) {
-                                                    viewModel.selectedDateFilter.value = TransactionDateFilter.ALL_TIME
-                                                }
-                                            }) {
-                                                Text("Cancel")
-                                            }
-                                        }
-                                    ) {
-                                        DateRangePicker(
-                                            state = datePickerState,
-                                            modifier = Modifier.weight(1f)
-                                        )
-                                    }
-                                }
-                            }
-                            
-                            item {
-                                var expanded by remember { mutableStateOf(false) }
-                                val selectedColor = selectedCategoryFilter?.let { if (it == "Transfer") Color(0xFF009688) else CategoryUtils.getCategoryColor(it) }
-                                
+                                var categoryMenuExpanded by remember { mutableStateOf(false) }
+                                val allCategories = remember { listOf("All Categories", "Transfer") + CategoryUtils.expenseCategories + CategoryUtils.incomeCategories }
+
                                 Box {
                                     FilterChip(
                                         selected = selectedCategoryFilter != null,
-                                        onClick = { expanded = true },
+                                        onClick = { categoryMenuExpanded = true },
                                         label = { Text(selectedCategoryFilter ?: "Category") },
-                                        trailingIcon = { Icon(Icons.Default.ArrowDropDown, "Dropdown") },
-                                        colors = FilterChipDefaults.filterChipColors(
-                                            selectedContainerColor = selectedColor?.copy(alpha = 0.2f) ?: Color.Transparent,
-                                            selectedLabelColor = selectedColor ?: MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
+                                        trailingIcon = { Icon(Icons.Default.ArrowDropDown, contentDescription = null) },
+                                        leadingIcon = { Icon(Icons.Default.Category, contentDescription = null, modifier = Modifier.size(16.dp)) }
                                     )
-                                    DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                                        DropdownMenuItem(
-                                            text = { Text("All Categories") },
-                                            onClick = { 
-                                                viewModel.selectedCategoryFilter.value = null
-                                                expanded = false 
-                                            }
-                                        )
-                                        CategoryUtils.allFilterCategories.forEach { cat ->
+
+                                    DropdownMenu(
+                                        expanded = categoryMenuExpanded,
+                                        onDismissRequest = { categoryMenuExpanded = false }
+                                    ) {
+                                        allCategories.forEach { cat ->
                                             DropdownMenuItem(
-                                                text = { 
-                                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                                        Box(modifier = Modifier.size(12.dp).clip(CircleShape).background(if (cat == "Transfer") Color(0xFF009688) else CategoryUtils.getCategoryColor(cat)))
-                                                        Spacer(modifier = Modifier.width(8.dp))
-                                                        Text(cat)
-                                                    }
-                                                },
-                                                onClick = { 
-                                                    viewModel.selectedCategoryFilter.value = cat
-                                                    expanded = false 
+                                                text = { Text(cat) },
+                                                onClick = {
+                                                    categoryMenuExpanded = false
+                                                    viewModel.selectedCategoryFilter.value = if (cat == "All Categories") null else cat
                                                 }
                                             )
                                         }
                                     }
                                 }
-                            }
-                        }
-                    }
-                }
-                
-                if (filteredExpenses.isEmpty()) {
-                    item(key = "empty_transactions_state", contentType = "empty_state") {
-                        Column(
-                            modifier = Modifier.fillMaxWidth().padding(32.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.Center
-                        ) {
-                            if (hasActiveFilters || expenses.isNotEmpty()) {
-                                Icon(
-                                    imageVector = Icons.Default.SearchOff,
-                                    contentDescription = "No matching transactions",
-                                    modifier = Modifier.size(64.dp),
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                                )
-                                Spacer(modifier = Modifier.height(16.dp))
-                                Text(
-                                    text = "No matching transactions",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Spacer(modifier = Modifier.height(8.dp))
-                                TextButton(onClick = { viewModel.clearFilters() }) {
-                                    Text("Clear Filters")
-                                }
-                            } else {
-                                Icon(
-                                    imageVector = Icons.AutoMirrored.Filled.ReceiptLong,
-                                    contentDescription = "No transactions yet",
-                                    modifier = Modifier.size(64.dp),
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                                )
-                                Spacer(modifier = Modifier.height(16.dp))
-                                Text(
-                                    text = "No transactions yet",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text(
-                                    text = "Tap + to add your first transaction.",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
-                                )
-                            }
-                        }
-                    }
-                } else {
-                    items(
-                        items = filteredExpenses,
-                        key = { "tx_${it.id}" },
-                        contentType = { "transaction" }
-                    ) { expense ->
-                        @Suppress("DEPRECATION")
-                        val dismissState = rememberSwipeToDismissBoxState(
-                            confirmValueChange = {
-                                if (it == SwipeToDismissBoxValue.EndToStart) {
-                                    transactionPendingDelete = expense
-                                    false
-                                } else {
-                                    false
-                                }
-                            }
-                        )
 
-                        SwipeToDismissBox(
-                            state = dismissState,
-                            enableDismissFromStartToEnd = false,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                            backgroundContent = {
-                                val isSwiping = dismissState.targetValue == SwipeToDismissBoxValue.EndToStart || dismissState.dismissDirection == SwipeToDismissBoxValue.EndToStart
-                                val color = if (isSwiping) {
-                                    MaterialTheme.colorScheme.errorContainer
-                                } else {
-                                    Color.Transparent
+                                if (hasActiveFilters) {
+                                    AssistChip(
+                                        onClick = { viewModel.clearFilters() },
+                                        label = { Text("Clear") },
+                                        leadingIcon = { Icon(Icons.Default.Clear, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                                    )
                                 }
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxSize()
-                                        .background(color, RoundedCornerShape(12.dp))
-                                        .padding(end = 16.dp),
-                                    contentAlignment = Alignment.CenterEnd
+                            }
+                        }
+                    }
+
+                    if (filteredExpenses.isEmpty()) {
+                        item(key = "empty_transactions") {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 48.dp, horizontal = 24.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.Center
                                 ) {
-                                    if (isSwiping) {
+                                    Surface(
+                                        shape = RoundedCornerShape(24.dp),
+                                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f),
+                                        modifier = Modifier.size(80.dp)
+                                    ) {
+                                        Box(contentAlignment = Alignment.Center) {
+                                            Icon(
+                                                imageVector = Icons.Default.ReceiptLong,
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier.size(40.dp)
+                                            )
+                                        }
+                                    }
+
+                                    Spacer(modifier = Modifier.height(16.dp))
+
+                                    Text(
+                                        text = if (hasActiveFilters) "No matching transactions" else "No transactions yet",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+
+                                    Spacer(modifier = Modifier.height(6.dp))
+
+                                    Text(
+                                        text = if (hasActiveFilters) "Try adjusting your search query or filters." else "Tap + to add your first transaction.",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        textAlign = TextAlign.Center
+                                    )
+
+                                    if (hasActiveFilters) {
+                                        Spacer(modifier = Modifier.height(12.dp))
+                                        OutlinedButton(onClick = { viewModel.clearFilters() }) {
+                                            Text("Clear Filters")
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        items(items = filteredExpenses, key = { it.id }) { expense ->
+                            val dismissState = rememberSwipeToDismissBoxState(
+                                confirmValueChange = { dismissValue ->
+                                    if (dismissValue == SwipeToDismissBoxValue.EndToStart || dismissValue == SwipeToDismissBoxValue.StartToEnd) {
+                                        transactionPendingDelete = expense
+                                        false
+                                    } else false
+                                }
+                            )
+
+                            SwipeToDismissBox(
+                                state = dismissState,
+                                enableDismissFromStartToEnd = true,
+                                enableDismissFromEndToStart = true,
+                                backgroundContent = {
+                                    val direction = dismissState.dismissDirection
+                                    val color = if (direction == SwipeToDismissBoxValue.EndToStart || direction == SwipeToDismissBoxValue.StartToEnd) {
+                                        MaterialTheme.colorScheme.errorContainer
+                                    } else {
+                                        Color.Transparent
+                                    }
+                                    val alignment = if (direction == SwipeToDismissBoxValue.StartToEnd) Alignment.CenterStart else Alignment.CenterEnd
+
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .padding(horizontal = 16.dp, vertical = 4.dp)
+                                            .clip(RoundedCornerShape(12.dp))
+                                            .background(color)
+                                            .padding(horizontal = 20.dp),
+                                        contentAlignment = alignment
+                                    ) {
                                         Icon(
-                                            Icons.Default.Delete,
+                                            imageVector = Icons.Default.Delete,
                                             contentDescription = "Delete",
                                             tint = MaterialTheme.colorScheme.onErrorContainer
                                         )
                                     }
+                                },
+                                content = {
+                                    ExpenseItem(
+                                        expense = expense,
+                                        accounts = accounts,
+                                        selectedAccountId = selectedAccountId,
+                                        currencySymbol = currentCurrencySymbol,
+                                        onClick = {
+                                            viewModel.setEditingExpense(expense)
+                                            showBottomSheet = true
+                                        }
+                                    )
                                 }
-                            },
-                            content = {
-                                ExpenseItem(
-                                    expense = expense,
-                                    accounts = accounts,
-                                    selectedAccountId = selectedAccountId,
-                                    currencySymbol = currentCurrencySymbol,
-                                    onClick = {
-                                        viewModel.setEditingExpense(expense)
-                                        showBottomSheet = true
-                                    }
-                                )
-                            }
-                        )
+                            )
+                        }
                     }
+                } else {
+                    analyticsItems(
+                        selectedPeriod = selectedPeriod,
+                        onPeriodChanged = { viewModel.selectedPeriod.value = it },
+                        periodIncome = periodIncome,
+                        periodExpense = periodExpense,
+                        currencySymbol = currentCurrencySymbol,
+                        expenseCategoryStats = expenseCategoryStats,
+                        incomeCategoryStats = incomeCategoryStats,
+                        selectedMode = analyticsMode,
+                        onModeChanged = { analyticsMode = it },
+                        categoryBudgets = categoryBudgets,
+                        budgetProgressList = currentMonthBudgetProgress,
+                        onManageBudgetsClick = { showBudgetsDialog = true }
+                    )
                 }
-            } else {
-                analyticsItems(
-                    selectedPeriod = selectedPeriod,
-                    onPeriodChanged = { viewModel.selectedPeriod.value = it },
-                    periodIncome = periodIncome,
-                    periodExpense = periodExpense,
-                    currencySymbol = currentCurrencySymbol,
-                    expenseCategoryStats = expenseCategoryStats,
-                    incomeCategoryStats = incomeCategoryStats,
-                    selectedMode = analyticsMode,
-                    onModeChanged = { analyticsMode = it },
-                    categoryBudgets = categoryBudgets,
-                    budgetProgressList = currentMonthBudgetProgress,
-                    onManageBudgetsClick = { showBudgetsDialog = true }
-                )
             }
-        }
         }
     }
 
-    if (showAddWalletDialog) {
-        var walletName by remember { mutableStateOf("") }
-        var initialBalance by remember { mutableStateOf("") }
-        AlertDialog(
-            onDismissRequest = { showAddWalletDialog = false },
-            title = { Text("Add Wallet") },
-            text = {
-                Column {
-                    OutlinedTextField(
-                        value = walletName,
-                        onValueChange = { walletName = it },
-                        label = { Text("Wallet Name") },
-                        singleLine = true
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = initialBalance,
-                        onValueChange = { initialBalance = it },
-                        label = { Text("Initial Balance") },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                        singleLine = true
+    if (showBottomSheet) {
+        AddExpenseBottomSheet(
+            editingExpense = editingExpense,
+            accounts = accounts,
+            selectedAccountId = selectedAccountId,
+            onDismiss = { showBottomSheet = false },
+            onSave = { type, title, amount, category, accountId, toAccountId ->
+                if (editingExpense == null) {
+                    viewModel.addExpense(title, amount, category, System.currentTimeMillis(), type, accountId, toAccountId)
+                } else {
+                    viewModel.updateExpense(
+                        editingExpense!!.copy(
+                            title = title,
+                            amount = amount,
+                            category = category,
+                            type = type,
+                            accountId = accountId,
+                            toAccountId = toAccountId
+                        )
                     )
                 }
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    val bal = initialBalance.toDoubleOrNull() ?: 0.0
-                    if (walletName.isNotBlank()) {
-                        viewModel.addAccount(walletName, bal)
-                        showAddWalletDialog = false
-                    }
-                }) { Text("Save") }
-            },
-            dismissButton = {
-                TextButton(onClick = { showAddWalletDialog = false }) { Text("Cancel") }
+                showBottomSheet = false
             }
         )
     }
 
-    if (showCurrencyDialog) {
-        AlertDialog(
-            onDismissRequest = { showCurrencyDialog = false },
-            title = { Text("Select Currency") },
-            text = {
-                Column(Modifier.selectableGroup()) {
-                    CurrencyManager.currencies.forEach { currency ->
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .height(56.dp)
-                                .selectable(
-                                    selected = (currency.symbol == currentCurrencySymbol),
-                                    onClick = {
-                                        viewModel.setCurrency(currency.code)
-                                        showCurrencyDialog = false
-                                    },
-                                    role = Role.RadioButton
-                                )
-                                .padding(horizontal = 16.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            RadioButton(
-                                selected = (currency.symbol == currentCurrencySymbol),
-                                onClick = null // null recommended for accessibility with selectable
-                            )
-                            Text(
-                                text = currency.displayName,
-                                style = MaterialTheme.typography.bodyLarge,
-                                modifier = Modifier.padding(start = 16.dp)
-                            )
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { showCurrencyDialog = false }) { Text("Cancel") }
-            }
-        )
-    }
-
-    if (editingAccount != null) {
-        val acc = editingAccount!!
-        var walletName by remember(acc) { mutableStateOf(acc.name) }
-        var initialBalance by remember(acc) {
-            mutableStateOf(
-                if (acc.initialBalance % 1.0 == 0.0) acc.initialBalance.toLong().toString() else acc.initialBalance.toString()
-            )
-        }
-        AlertDialog(
-            onDismissRequest = { editingAccount = null },
-            title = { Text("Edit Wallet") },
-            text = {
-                Column {
-                    OutlinedTextField(
-                        value = walletName,
-                        onValueChange = { walletName = it },
-                        label = { Text("Wallet Name") },
-                        singleLine = true
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = initialBalance,
-                        onValueChange = { initialBalance = it },
-                        label = { Text("Initial Balance") },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                        singleLine = true
-                    )
-                    
-                    if (accounts.size > 1) {
-                        Spacer(Modifier.height(16.dp))
-                        OutlinedButton(
-                            onClick = { 
-                                deletingAccount = acc
-                                editingAccount = null 
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
-                        ) {
-                            Icon(Icons.Default.Delete, contentDescription = "Delete", modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(8.dp))
-                            Text("Delete Wallet")
-                        }
-                    } else {
-                        Spacer(Modifier.height(16.dp))
-                        Text(
-                            text = "This is your only wallet. You must have at least one wallet.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    val bal = initialBalance.toDoubleOrNull() ?: acc.initialBalance
-                    if (walletName.isNotBlank()) {
-                        viewModel.updateAccount(acc.copy(name = walletName, initialBalance = bal))
-                        editingAccount = null
-                    }
-                }) { Text("Save") }
-            },
-            dismissButton = {
-                TextButton(onClick = { editingAccount = null }) { Text("Cancel") }
-            }
-        )
-    }
-
-    if (deletingAccount != null) {
-        val acc = deletingAccount!!
-        val linkedCount = remember(acc, expenses) { viewModel.getLinkedTransactionCount(acc.id) }
-        val remainingBalance = remember(acc, accountBalances) { accountBalances[acc.id] ?: acc.initialBalance }
-        val formattedRemaining = formatCurrency(remainingBalance, currentCurrencySymbol)
-        val otherAccounts = remember(acc, accounts) { accounts.filter { it.id != acc.id } }
-
-        if (linkedCount == 0 && remainingBalance == 0.0) {
-            AlertDialog(
-                onDismissRequest = { deletingAccount = null },
-                title = { Text("Delete '${acc.name}'?") },
-                text = { Text("This wallet has a 0.00 balance and no linked transactions. Are you sure you want to delete it?") },
-                confirmButton = {
-                    TextButton(
-                        onClick = {
-                            viewModel.deleteAccountSafely(acc, WalletDeletionMode.DELETE_EVERYTHING)
-                            deletingAccount = null
-                        }
-                    ) {
-                        Text("Delete", color = MaterialTheme.colorScheme.error)
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = { deletingAccount = null }) { Text("Cancel") }
-                }
-            )
-        } else {
-            var selectedMode by remember(acc) {
-                mutableStateOf(
-                    if (linkedCount > 0) WalletDeletionMode.MOVE_TRANSACTIONS_AND_BALANCE 
-                    else if (remainingBalance != 0.0) WalletDeletionMode.MOVE_REMAINING_BALANCE_ONLY 
-                    else WalletDeletionMode.DELETE_EVERYTHING
-                )
-            }
-            var targetAccountId by remember(acc, otherAccounts) { mutableStateOf(otherAccounts.firstOrNull()?.id ?: -1) }
-            var newWalletName by remember { mutableStateOf("") }
-            val isNewWalletSelected = targetAccountId == -1
-
-            AlertDialog(
-                onDismissRequest = { deletingAccount = null },
-                title = { Text("Delete '${acc.name}'?") },
-                text = {
-                    Column {
-                        Text(
-                            text = "Current balance: $formattedRemaining • Linked transactions: $linkedCount",
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Spacer(modifier = Modifier.height(16.dp))
-                        
-                        // Option 1: Move Transactions & Balance
-                        if (linkedCount > 0) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .selectable(
-                                        selected = selectedMode == WalletDeletionMode.MOVE_TRANSACTIONS_AND_BALANCE,
-                                        onClick = { selectedMode = WalletDeletionMode.MOVE_TRANSACTIONS_AND_BALANCE },
-                                        role = Role.RadioButton
-                                    )
-                                    .padding(vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                RadioButton(
-                                    selected = selectedMode == WalletDeletionMode.MOVE_TRANSACTIONS_AND_BALANCE,
-                                    onClick = { selectedMode = WalletDeletionMode.MOVE_TRANSACTIONS_AND_BALANCE }
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Column {
-                                    Text(
-                                        text = "Move transactions & balance ($formattedRemaining)",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        fontWeight = FontWeight.Medium
-                                    )
-                                }
-                            }
-                            if (selectedMode == WalletDeletionMode.MOVE_TRANSACTIONS_AND_BALANCE) {
-                                Column(modifier = Modifier.padding(start = 32.dp, top = 4.dp, bottom = 8.dp)) {
-                                    Text(
-                                        text = "Merges all $linkedCount transaction(s) and the remaining balance into the selected wallet.",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-                        }
-
-                        // Option 2: Move Remaining Balance Only
-                        if (remainingBalance != 0.0) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .selectable(
-                                        selected = selectedMode == WalletDeletionMode.MOVE_REMAINING_BALANCE_ONLY,
-                                        onClick = { selectedMode = WalletDeletionMode.MOVE_REMAINING_BALANCE_ONLY },
-                                        role = Role.RadioButton
-                                    )
-                                    .padding(vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                RadioButton(
-                                    selected = selectedMode == WalletDeletionMode.MOVE_REMAINING_BALANCE_ONLY,
-                                    onClick = { selectedMode = WalletDeletionMode.MOVE_REMAINING_BALANCE_ONLY }
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Column {
-                                    Text(
-                                        text = "Move only remaining balance ($formattedRemaining)",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        fontWeight = FontWeight.Medium
-                                    )
-                                }
-                            }
-                            if (selectedMode == WalletDeletionMode.MOVE_REMAINING_BALANCE_ONLY) {
-                                Column(modifier = Modifier.padding(start = 32.dp, top = 4.dp, bottom = 8.dp)) {
-                                    Text(
-                                        text = "Transfers the balance to a wallet and removes old transaction history for '${acc.name}'.",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-                        }
-
-                        // Target Wallet Selector (Shared for Mode 1 & 2)
-                        if (selectedMode == WalletDeletionMode.MOVE_TRANSACTIONS_AND_BALANCE || selectedMode == WalletDeletionMode.MOVE_REMAINING_BALANCE_ONLY) {
-                            Column(modifier = Modifier.padding(start = 32.dp, top = 4.dp, bottom = 12.dp)) {
-                                FlowRow(
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    otherAccounts.forEach { otherAcc ->
-                                        FilterChip(
-                                            selected = targetAccountId == otherAcc.id,
-                                            onClick = { targetAccountId = otherAcc.id },
-                                            label = { Text(otherAcc.name) }
-                                        )
-                                    }
-                                    FilterChip(
-                                        selected = targetAccountId == -1,
-                                        onClick = { targetAccountId = -1 },
-                                        label = { Text("+ New Wallet") },
-                                        colors = FilterChipDefaults.filterChipColors(
-                                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
-                                        )
-                                    )
-                                }
-                                if (isNewWalletSelected) {
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                    OutlinedTextField(
-                                        value = newWalletName,
-                                        onValueChange = { newWalletName = it },
-                                        label = { Text("New Wallet Name") },
-                                        singleLine = true,
-                                        modifier = Modifier.fillMaxWidth()
-                                    )
-                                }
-                            }
-                        }
-
-                        // Option 3: Delete Everything
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .selectable(
-                                    selected = selectedMode == WalletDeletionMode.DELETE_EVERYTHING,
-                                    onClick = { selectedMode = WalletDeletionMode.DELETE_EVERYTHING },
-                                    role = Role.RadioButton
-                                )
-                                .padding(vertical = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            RadioButton(
-                                selected = selectedMode == WalletDeletionMode.DELETE_EVERYTHING,
-                                onClick = { selectedMode = WalletDeletionMode.DELETE_EVERYTHING }
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "Delete wallet, balance, and transactions",
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.Medium
-                            )
-                        }
-
-                        if (selectedMode == WalletDeletionMode.DELETE_EVERYTHING) {
-                            Column(modifier = Modifier.padding(start = 32.dp, top = 4.dp)) {
-                                Text(
-                                    text = "Warning: Permanently deletes '${acc.name}', its balance, and $linkedCount linked transaction(s).",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.error
-                                )
-                            }
-                        }
-                    }
-                },
-                confirmButton = {
-                    val isConfirmEnabled = selectedMode == WalletDeletionMode.DELETE_EVERYTHING || 
-                                           (!isNewWalletSelected && targetAccountId != -1) || 
-                                           (isNewWalletSelected && newWalletName.isNotBlank())
-                    TextButton(
-                        onClick = {
-                            val targetId = if (isNewWalletSelected) null else targetAccountId
-                            val targetName = if (isNewWalletSelected) newWalletName else null
-                            viewModel.deleteAccountSafely(acc, selectedMode, targetId, targetName)
-                            deletingAccount = null
-                        },
-                        enabled = isConfirmEnabled
-                    ) {
-                        Text("Confirm Delete", color = if (isConfirmEnabled) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f))
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = { deletingAccount = null }) { Text("Cancel") }
-                }
-            )
-        }
-    }
-
-    transactionPendingDelete?.let { tx ->
-        AlertDialog(
-            onDismissRequest = { transactionPendingDelete = null },
-            title = { Text("Delete Transaction?") },
-            text = { Text("Are you sure you want to delete '${tx.title}'? This will update your wallet balance.") },
+    if (showCustomDateRangePicker) {
+        val dateRangePickerState = rememberDateRangePickerState()
+        DatePickerDialog(
+            onDismissRequest = { showCustomDateRangePicker = false },
             confirmButton = {
                 TextButton(
                     onClick = {
-                        viewModel.deleteExpense(tx)
-                        transactionPendingDelete = null
+                        val start = dateRangePickerState.selectedStartDateMillis
+                        val end = dateRangePickerState.selectedEndDateMillis
+                        if (start != null && end != null) {
+                            viewModel.selectedDateFilter.value = TransactionDateFilter.CUSTOM
+                            viewModel.customDateRange.value = start to end
+                        }
+                        showCustomDateRangePicker = false
                     }
                 ) {
-                    Text("Delete", color = MaterialTheme.colorScheme.error)
+                    Text("OK")
                 }
             },
             dismissButton = {
-                TextButton(onClick = { transactionPendingDelete = null }) {
+                TextButton(onClick = { showCustomDateRangePicker = false }) {
                     Text("Cancel")
                 }
             }
-        )
+        ) {
+            DateRangePicker(
+                state = dateRangePickerState,
+                title = { Text("Select Date Range", modifier = Modifier.padding(16.dp)) },
+                modifier = Modifier.weight(1f)
+            )
+        }
     }
 
     if (showBackupDialog) {
-        ModalBottomSheet(onDismissRequest = { showBackupDialog = false }) {
+        ModalBottomSheet(
+            onDismissRequest = { showBackupDialog = false },
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
+                    .padding(16.dp)
             ) {
                 Text(
-                    text = "Backup & Export",
+                    text = "Data Management",
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold
                 )
@@ -982,7 +619,7 @@ fun DashboardScreen(
 
                 ListItem(
                     headlineContent = { Text("Backup App Data (JSON)") },
-                    supportingContent = { Text("Save all wallets, balances, and transactions to a local backup file.") },
+                    supportingContent = { Text("Save all wallets, balances, transactions, and recurring rules to a local backup file.") },
                     modifier = Modifier.clickable {
                         showBackupDialog = false
                         val date = SimpleDateFormat("yyyyMMdd", Locale.getDefault()).format(Date())
@@ -992,7 +629,7 @@ fun DashboardScreen(
 
                 ListItem(
                     headlineContent = { Text("Restore Backup (JSON)") },
-                    supportingContent = { Text("Restore wallets and transactions from a backup file.") },
+                    supportingContent = { Text("Restore wallets, transactions, and recurring rules from a backup file.") },
                     modifier = Modifier.clickable {
                         showBackupDialog = false
                         showRestoreConfirmDialog = true
@@ -1008,7 +645,7 @@ fun DashboardScreen(
         AlertDialog(
             onDismissRequest = { showRestoreConfirmDialog = false },
             title = { Text("Restore Backup") },
-            text = { Text("Restoring a backup will replace your current wallets and transactions with the backup file. Continue?") },
+            text = { Text("Restoring a backup will replace your current wallets, transactions, and recurring rules with the backup file. Continue?") },
             confirmButton = {
                 TextButton(
                     onClick = {
@@ -1027,148 +664,103 @@ fun DashboardScreen(
         )
     }
 
-    if (showBudgetsDialog) {
-        ModalBottomSheet(
-            onDismissRequest = { showBudgetsDialog = false },
-            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 16.dp, vertical = 8.dp)
-            ) {
-                Text(
-                    text = "Manage Monthly Budgets",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(bottom = 16.dp)
-                )
-
-                val budgetInputs = remember(categoryBudgets) {
-                    mutableStateMapOf<String, String>().apply {
-                        CategoryUtils.expenseCategories.forEach { category ->
-                            val existing = categoryBudgets[category]
-                            put(
-                                category,
-                                if (existing != null && existing > 0.0) {
-                                    if (existing % 1.0 == 0.0) existing.toLong().toString() else existing.toString()
-                                } else ""
-                            )
-                        }
-                    }
-                }
-
-                CategoryUtils.expenseCategories.forEach { category ->
-                    val limitInput = budgetInputs[category] ?: ""
-                    
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-                            Box(
-                                modifier = Modifier
-                                    .size(32.dp)
-                                    .clip(CircleShape)
-                                    .background(CategoryUtils.getCategoryColor(category).copy(alpha = 0.2f)),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = CategoryUtils.getCategoryIcon(category),
-                                    contentDescription = category,
-                                    tint = CategoryUtils.getCategoryColor(category),
-                                    modifier = Modifier.size(16.dp)
-                                )
-                            }
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Text(category, style = MaterialTheme.typography.bodyLarge)
-                        }
-
-                        OutlinedTextField(
-                            value = limitInput,
-                            onValueChange = { input -> 
-                                val filtered = input.filterIndexed { index, char ->
-                                    char.isDigit() || (char == '.' && input.indexOf('.') == index)
-                                }
-                                budgetInputs[category] = filtered
-                            },
-                            modifier = Modifier.width(140.dp),
-                            placeholder = { Text("No Limit") },
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                            singleLine = true,
-                            trailingIcon = {
-                                if (limitInput.isNotEmpty()) {
-                                    IconButton(onClick = { budgetInputs[category] = "" }) {
-                                        Icon(Icons.Default.Clear, contentDescription = "Clear")
-                                    }
-                                }
-                            }
-                        )
-                    }
-                }
-                
-                Spacer(modifier = Modifier.height(24.dp))
-                Button(
-                    onClick = { 
-                        CategoryUtils.expenseCategories.forEach { category ->
-                            val limit = budgetInputs[category]?.toDoubleOrNull() ?: 0.0
-                            viewModel.setCategoryBudget(category, limit)
-                        }
-                        coroutineScope.launch {
-                            snackbarHostState.showSnackbar("Monthly budgets saved")
-                        }
-                        showBudgetsDialog = false 
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Save Budgets")
-                }
-                Spacer(modifier = Modifier.height(32.dp))
-            }
-        }
-    }
-
-    if (showBottomSheet) {
-        AddExpenseBottomSheet(
-            editingExpense = editingExpense,
-            accounts = accounts,
-            dashboardSelectedAccountId = selectedAccountId,
-            onDismiss = {
-                showBottomSheet = false
-                viewModel.setEditingExpense(null)
-            },
-            onSave = { type, title, amount, category, accId, toAccId ->
-                val currentEditing = editingExpense
-                if (currentEditing != null) {
-                    viewModel.updateExpense(
-                        currentEditing.copy(
-                            type = type,
-                            title = title,
-                            amount = amount,
-                            category = category,
-                            accountId = accId,
-                            toAccountId = if (type == TransactionType.TRANSFER) toAccId else null
-                        )
-                    )
-                } else {
-                    viewModel.addExpense(
-                        title = title,
-                        amount = amount,
-                        category = category,
-                        date = System.currentTimeMillis(),
-                        type = type,
-                        accountId = accId,
-                        toAccountId = if (type == TransactionType.TRANSFER) toAccId else null
-                    )
-                }
-                showBottomSheet = false
-                viewModel.setEditingExpense(null)
+    if (showAddWalletDialog) {
+        AddWalletDialog(
+            onDismiss = { showAddWalletDialog = false },
+            onSave = { name, initialBalance ->
+                viewModel.addAccount(name, initialBalance)
+                showAddWalletDialog = false
             }
         )
     }
+
+    if (editingAccount != null) {
+        EditWalletDialog(
+            account = editingAccount!!,
+            onDismiss = { editingAccount = null },
+            onSave = { updated ->
+                viewModel.updateAccount(updated)
+                editingAccount = null
+            },
+            onDelete = { accountToDelete ->
+                deletingAccount = accountToDelete
+                editingAccount = null
+            }
+        )
+    }
+
+    if (deletingAccount != null) {
+        DeleteWalletDialog(
+            account = deletingAccount!!,
+            accounts = accounts,
+            onDismiss = { deletingAccount = null },
+            onConfirmDelete = { mode, targetId, newName ->
+                viewModel.deleteAccountSafely(deletingAccount!!, mode, targetId, newName)
+                deletingAccount = null
+            }
+        )
+    }
+
+    if (transactionPendingDelete != null) {
+        AlertDialog(
+            onDismissRequest = { transactionPendingDelete = null },
+            title = { Text("Delete Transaction") },
+            text = { Text("Are you sure you want to delete '${transactionPendingDelete!!.title}'?") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.deleteExpense(transactionPendingDelete!!)
+                        transactionPendingDelete = null
+                    }
+                ) {
+                    Text("Delete", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { transactionPendingDelete = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    if (showCurrencyDialog) {
+        CurrencyDialog(
+            currentCurrencySymbol = currentCurrencySymbol,
+            onDismiss = { showCurrencyDialog = false },
+            onSelectCurrency = { code ->
+                viewModel.setCurrency(code)
+                showCurrencyDialog = false
+            }
+        )
+    }
+
+    if (showBudgetsDialog) {
+        ManageBudgetsDialog(
+            categoryBudgets = categoryBudgets,
+            currencySymbol = currentCurrencySymbol,
+            onDismiss = { showBudgetsDialog = false },
+            onSetBudget = { cat, limit ->
+                viewModel.setCategoryBudget(cat, limit)
+            },
+            onRemoveBudget = { cat ->
+                viewModel.removeCategoryBudget(cat)
+            }
+        )
+    }
+}
+
+
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun OptInFlowRow(content: @Composable RowScope.() -> Unit) {
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+        content = content
+    )
 }
 
 @Composable
@@ -1181,55 +773,54 @@ fun WalletCard(
     onEditClick: (() -> Unit)? = null
 ) {
     Card(
-        modifier = Modifier
-            .width(140.dp)
-            .height(80.dp)
-            .clickable(onClick = onClick),
+        onClick = onClick,
+        shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
             containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
         ),
-        shape = RoundedCornerShape(12.dp)
+        modifier = Modifier.width(150.dp)
     ) {
-        Box(modifier = Modifier.fillMaxSize()) {
-            if (onEditClick != null) {
-                IconButton(
-                    onClick = onEditClick,
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .size(28.dp)
-                        .padding(2.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Edit,
-                        contentDescription = "Edit Wallet",
-                        tint = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(16.dp)
-                    )
-                }
-            }
-            Column(
-                modifier = Modifier
-                    .padding(8.dp)
-                    .fillMaxSize(),
-                verticalArrangement = Arrangement.Center,
-                horizontalAlignment = Alignment.CenterHorizontally
+        Column(
+            modifier = Modifier.padding(16.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
                     text = name,
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.Bold,
+                    style = MaterialTheme.typography.labelMedium,
                     maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
                 )
-                if (balance != null) {
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = formatCurrency(balance, currencySymbol),
-                        style = MaterialTheme.typography.bodyMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                if (onEditClick != null) {
+                    IconButton(
+                        onClick = onEditClick,
+                        modifier = Modifier.size(24.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Edit,
+                            contentDescription = "Edit Wallet",
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
                 }
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            if (balance != null) {
+                Text(
+                    text = "$currencySymbol${String.format(Locale.US, "%.2f", balance)}",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+            } else {
+                Text(
+                    text = "Add",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.primary
+                )
             }
         }
     }
@@ -1241,167 +832,113 @@ fun ExpenseItem(
     accounts: List<AccountEntity>,
     selectedAccountId: Int?,
     currencySymbol: String,
-    onClick: () -> Unit = {}
+    onClick: () -> Unit
 ) {
-    val dateString = remember(expense.date) { SimpleDateFormat("MMM dd, yyyy", Locale.getDefault()).format(Date(expense.date)) }
-    val isTransfer = expense.type == TransactionType.TRANSFER
-
-    val categoryColor = if (isTransfer) Color(0xFF009688) else CategoryUtils.getCategoryColor(expense.category)
-    val categoryIcon = if (isTransfer) Icons.Default.SwapHoriz else CategoryUtils.getCategoryIcon(expense.category)
-
-    val amountText: String
-    val amountColor: Color
-
-    when (expense.type) {
-        TransactionType.INCOME -> {
-            amountText = formatCurrency(expense.amount, currencySymbol, "+")
-            amountColor = Color(0xFF4CAF50)
-        }
-        TransactionType.EXPENSE -> {
-            amountText = formatCurrency(expense.amount, currencySymbol, "-")
-            amountColor = MaterialTheme.colorScheme.error
-        }
-        TransactionType.TRANSFER -> {
-            when (selectedAccountId) {
-                null -> {
-                    amountText = formatCurrency(expense.amount, currencySymbol)
-                    amountColor = MaterialTheme.colorScheme.tertiary
-                }
-                expense.accountId -> {
-                    // Sender
-                    amountText = formatCurrency(expense.amount, currencySymbol, "-")
-                    amountColor = Color(0xFFFF5722)
-                }
-                expense.toAccountId -> {
-                    // Receiver
-                    amountText = formatCurrency(expense.amount, currencySymbol, "+")
-                    amountColor = Color(0xFF4CAF50)
-                }
-                else -> {
-                    amountText = formatCurrency(expense.amount, currencySymbol)
-                    amountColor = MaterialTheme.colorScheme.tertiary
-                }
-            }
-        }
+    val walletName = remember(expense.accountId, accounts) {
+        accounts.find { it.id == expense.accountId }?.name ?: "Unknown Wallet"
+    }
+    val toWalletName = remember(expense.toAccountId, accounts) {
+        expense.toAccountId?.let { toId -> accounts.find { it.id == toId }?.name }
+    }
+    val dateString = remember(expense.date) {
+        SimpleDateFormat("MMM dd, yyyy", Locale.getDefault()).format(Date(expense.date))
     }
 
-    val fromAccount = accounts.find { it.id == expense.accountId }?.name ?: "Unknown"
-    val toAccount = accounts.find { it.id == expense.toAccountId }?.name ?: "Unknown"
-    val badgeText = if (isTransfer) "$fromAccount → $toAccount" else fromAccount
-
-    Surface(
+    Card(
+        onClick = onClick,
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick),
-        color = MaterialTheme.colorScheme.surface
+            .padding(horizontal = 16.dp, vertical = 4.dp)
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp),
+                .padding(16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            val iconBg = when (expense.type) {
+                TransactionType.INCOME -> Color(0xFFE8F5E9)
+                TransactionType.EXPENSE -> Color(0xFFFFEBEE)
+                TransactionType.TRANSFER -> Color(0xFFE3F2FD)
+            }
+            val iconTint = when (expense.type) {
+                TransactionType.INCOME -> Color(0xFF2E7D32)
+                TransactionType.EXPENSE -> Color(0xFFC62828)
+                TransactionType.TRANSFER -> Color(0xFF1565C0)
+            }
+
             Box(
                 modifier = Modifier
-                    .size(48.dp)
+                    .size(40.dp)
                     .clip(CircleShape)
-                    .background(categoryColor.copy(alpha = 0.2f)),
+                    .background(iconBg),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
-                    imageVector = categoryIcon,
+                    imageVector = when (expense.type) {
+                        TransactionType.TRANSFER -> Icons.Default.SwapHoriz
+                        else -> CategoryUtils.getCategoryIcon(expense.category)
+                    },
                     contentDescription = expense.category,
-                    tint = categoryColor
+                    tint = iconTint,
+                    modifier = Modifier.size(20.dp)
                 )
             }
 
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(horizontal = 12.dp)
-            ) {
+            Spacer(modifier = Modifier.width(16.dp))
+
+            Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = expense.title,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.SemiBold
                 )
-                Spacer(modifier = Modifier.height(4.dp))
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                    itemVerticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = dateString,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Surface(
-                        shape = RoundedCornerShape(4.dp),
-                        color = MaterialTheme.colorScheme.secondaryContainer
-                    ) {
-                        Text(
-                            text = badgeText,
-                            style = MaterialTheme.typography.labelSmall,
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                            color = MaterialTheme.colorScheme.onSecondaryContainer
-                        )
-                    }
-                }
+                Text(
+                    text = if (expense.type == TransactionType.TRANSFER && toWalletName != null) {
+                        "$walletName ➔ $toWalletName • $dateString"
+                    } else {
+                        "$walletName • ${expense.category} • $dateString"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
 
             Text(
-                text = amountText,
-                style = MaterialTheme.typography.bodyLarge,
+                text = "${if (expense.type == TransactionType.INCOME) "+" else if (expense.type == TransactionType.EXPENSE) "-" else ""}$currencySymbol${String.format(Locale.US, "%.2f", expense.amount)}",
+                style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
-                maxLines = 1,
-                color = amountColor,
-                textAlign = TextAlign.End
+                color = when (expense.type) {
+                    TransactionType.INCOME -> Color(0xFF2E7D32)
+                    TransactionType.EXPENSE -> MaterialTheme.colorScheme.error
+                    TransactionType.TRANSFER -> MaterialTheme.colorScheme.onSurface
+                }
             )
         }
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun AddExpenseBottomSheet(
-    editingExpense: ExpenseEntity? = null,
+    editingExpense: ExpenseEntity?,
     accounts: List<AccountEntity>,
-    dashboardSelectedAccountId: Int? = null,
+    selectedAccountId: Int?,
     onDismiss: () -> Unit,
     onSave: (TransactionType, String, Double, String, Int, Int?) -> Unit
 ) {
-    var selectedType by remember(editingExpense) { mutableStateOf(editingExpense?.type ?: TransactionType.EXPENSE) }
-    var title by remember(editingExpense) { mutableStateOf(editingExpense?.title ?: "") }
-    var amount by remember(editingExpense) {
-        mutableStateOf(
-            editingExpense?.amount?.let { valAmt ->
-                if (valAmt % 1.0 == 0.0) valAmt.toLong().toString() else valAmt.toString()
-            } ?: ""
-        )
-    }
-
-    val categories = CategoryUtils.getCategories(if (selectedType == TransactionType.TRANSFER) TransactionType.EXPENSE else selectedType)
-    var selectedCategory by remember(editingExpense, selectedType) {
-        mutableStateOf(
-            editingExpense?.category?.takeIf { categories.contains(it) && editingExpense.type == selectedType }
-            ?: if (selectedType == TransactionType.TRANSFER) "Transfer" else categories.first()
-        )
-    }
-
-    val defaultFromId = editingExpense?.accountId ?: dashboardSelectedAccountId ?: (accounts.firstOrNull()?.id ?: 1)
-    var selectedAccountId by remember(editingExpense, dashboardSelectedAccountId, accounts) {
-        mutableStateOf(defaultFromId)
-    }
-
-    val defaultToId = editingExpense?.toAccountId ?: (accounts.firstOrNull { it.id != defaultFromId }?.id ?: defaultFromId)
-    var selectedToAccountId by remember(editingExpense, accounts) {
-        mutableStateOf(defaultToId)
-    }
-
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+    var selectedType by remember { mutableStateOf(editingExpense?.type ?: TransactionType.EXPENSE) }
+    var title by remember { mutableStateOf(editingExpense?.title ?: "") }
+    var amount by remember { mutableStateOf(editingExpense?.amount?.let { if (it % 1.0 == 0.0) it.toLong().toString() else it.toString() } ?: "") }
+    var selectedCategory by remember { mutableStateOf(editingExpense?.category ?: CategoryUtils.expenseCategories.first()) }
+    var selectedFromAccountId by remember { mutableIntStateOf(editingExpense?.accountId ?: selectedAccountId ?: accounts.firstOrNull()?.id ?: 1) }
+    var selectedToAccountId by remember { mutableIntStateOf(editingExpense?.toAccountId ?: accounts.firstOrNull { it.id != selectedFromAccountId }?.id ?: 2) }
+
+    val categories = if (selectedType == TransactionType.INCOME) CategoryUtils.incomeCategories else CategoryUtils.expenseCategories
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -1410,99 +947,91 @@ fun AddExpenseBottomSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .padding(16.dp)
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 8.dp)
         ) {
             Text(
-                text = if (editingExpense != null) "Edit Transaction" else "Add Transaction",
+                text = if (editingExpense == null) "Add Transaction" else "Edit Transaction",
                 style = MaterialTheme.typography.titleLarge,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 16.dp),
-                textAlign = TextAlign.Center
+                fontWeight = FontWeight.Bold
             )
 
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
-                horizontalArrangement = Arrangement.Center
-            ) {
-                SingleChoiceSegmentedButtonRow {
-                    SegmentedButton(
-                        selected = selectedType == TransactionType.EXPENSE,
-                        onClick = { selectedType = TransactionType.EXPENSE },
-                        shape = SegmentedButtonDefaults.itemShape(index = 0, count = 3)
-                    ) {
-                        Text("Expense")
-                    }
-                    SegmentedButton(
-                        selected = selectedType == TransactionType.INCOME,
-                        onClick = { selectedType = TransactionType.INCOME },
-                        shape = SegmentedButtonDefaults.itemShape(index = 1, count = 3)
-                    ) {
-                        Text("Income")
-                    }
-                    SegmentedButton(
-                        selected = selectedType == TransactionType.TRANSFER,
-                        onClick = { selectedType = TransactionType.TRANSFER },
-                        shape = SegmentedButtonDefaults.itemShape(index = 2, count = 3)
-                    ) {
-                        Text("Transfer")
-                    }
+            Spacer(modifier = Modifier.height(16.dp))
+
+            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                SegmentedButton(
+                    selected = selectedType == TransactionType.EXPENSE,
+                    onClick = {
+                        selectedType = TransactionType.EXPENSE
+                        if (!CategoryUtils.expenseCategories.contains(selectedCategory)) {
+                            selectedCategory = CategoryUtils.expenseCategories.first()
+                        }
+                    },
+                    shape = SegmentedButtonDefaults.itemShape(index = 0, count = 3)
+                ) {
+                    Text("Expense")
+                }
+                SegmentedButton(
+                    selected = selectedType == TransactionType.INCOME,
+                    onClick = {
+                        selectedType = TransactionType.INCOME
+                        if (!CategoryUtils.incomeCategories.contains(selectedCategory)) {
+                            selectedCategory = CategoryUtils.incomeCategories.first()
+                        }
+                    },
+                    shape = SegmentedButtonDefaults.itemShape(index = 1, count = 3)
+                ) {
+                    Text("Income")
+                }
+                SegmentedButton(
+                    selected = selectedType == TransactionType.TRANSFER,
+                    onClick = { selectedType = TransactionType.TRANSFER },
+                    shape = SegmentedButtonDefaults.itemShape(index = 2, count = 3)
+                ) {
+                    Text("Transfer")
                 }
             }
 
-            OutlinedTextField(
-                value = title,
-                onValueChange = { title = it },
-                label = { Text(if (selectedType == TransactionType.TRANSFER) "Title (Optional)" else "Title") },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true
-            )
+            Spacer(modifier = Modifier.height(16.dp))
 
-            Spacer(modifier = Modifier.height(8.dp))
+            if (selectedType != TransactionType.TRANSFER) {
+                OutlinedTextField(
+                    value = title,
+                    onValueChange = { title = it },
+                    label = { Text("Title") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+            }
 
             OutlinedTextField(
                 value = amount,
                 onValueChange = { input ->
                     val filtered = input.filterIndexed { index, char ->
-                        char.isDigit() || 
-                        (char == '-' && index == 0) || 
-                        (char == '.' && input.indexOf('.') == index)
+                        char.isDigit() || (char == '.' && input.indexOf('.') == index)
                     }
                     amount = filtered
                 },
                 label = { Text("Amount") },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true
+                modifier = Modifier.fillMaxWidth()
             )
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Wallets selection
             if (selectedType == TransactionType.TRANSFER) {
                 Text("From Wallet", style = MaterialTheme.typography.titleSmall)
                 Spacer(modifier = Modifier.height(8.dp))
-                WalletSelector(accounts, selectedAccountId) { newFromId ->
-                    selectedAccountId = newFromId
-                    if (selectedToAccountId == newFromId) {
-                        selectedToAccountId = accounts.firstOrNull { it.id != newFromId }?.id ?: newFromId
-                    }
-                }
+                WalletSelector(accounts, selectedFromAccountId) { selectedFromAccountId = it }
 
                 Spacer(modifier = Modifier.height(16.dp))
                 Text("To Wallet", style = MaterialTheme.typography.titleSmall)
                 Spacer(modifier = Modifier.height(8.dp))
-                WalletSelector(accounts, selectedToAccountId) { newToId ->
-                    selectedToAccountId = newToId
-                    if (selectedAccountId == newToId) {
-                        selectedAccountId = accounts.firstOrNull { it.id != newToId }?.id ?: newToId
-                    }
-                }
+                WalletSelector(accounts, selectedToAccountId) { selectedToAccountId = it }
             } else {
                 Text("Wallet", style = MaterialTheme.typography.titleSmall)
                 Spacer(modifier = Modifier.height(8.dp))
-                WalletSelector(accounts, selectedAccountId) { selectedAccountId = it }
+                WalletSelector(accounts, selectedFromAccountId) { selectedFromAccountId = it }
 
                 Spacer(modifier = Modifier.height(16.dp))
                 Text("Category", style = MaterialTheme.typography.titleSmall)
@@ -1529,7 +1058,7 @@ fun AddExpenseBottomSheet(
 
             Spacer(modifier = Modifier.height(24.dp))
 
-            val isTransferInvalid = selectedType == TransactionType.TRANSFER && selectedAccountId == selectedToAccountId
+            val isTransferInvalid = selectedType == TransactionType.TRANSFER && selectedFromAccountId == selectedToAccountId
             val isTitleValid = selectedType == TransactionType.TRANSFER || title.isNotBlank()
             val isAmountValid = amount.toDoubleOrNull() != null
 
@@ -1540,7 +1069,7 @@ fun AddExpenseBottomSheet(
                         val finalTitle = if (title.isBlank() && selectedType == TransactionType.TRANSFER) "Transfer" else title
                         val finalCategory = if (selectedType == TransactionType.TRANSFER) "Transfer" else selectedCategory
                         val finalToAccountId = if (selectedType == TransactionType.TRANSFER) selectedToAccountId else null
-                        onSave(selectedType, finalTitle, amountValue, finalCategory, selectedAccountId, finalToAccountId)
+                        onSave(selectedType, finalTitle, amountValue, finalCategory, selectedFromAccountId, finalToAccountId)
                     }
                 },
                 modifier = Modifier.fillMaxWidth(),
@@ -1553,8 +1082,14 @@ fun AddExpenseBottomSheet(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun WalletSelector(accounts: List<AccountEntity>, selectedId: Int, onSelected: (Int) -> Unit) {
+fun WalletSelector(
+    accounts: List<AccountEntity>,
+    selectedId: Int,
+    onAddNewWallet: (() -> Unit)? = null,
+    onSelected: (Int) -> Unit
+) {
     FlowRow(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -1567,5 +1102,413 @@ fun WalletSelector(accounts: List<AccountEntity>, selectedId: Int, onSelected: (
                 label = { Text(acc.name) }
             )
         }
+        if (onAddNewWallet != null) {
+            FilterChip(
+                selected = false,
+                onClick = onAddNewWallet,
+                label = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.Add,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("New Wallet")
+                    }
+                },
+                colors = FilterChipDefaults.filterChipColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                )
+            )
+        }
     }
+}
+
+@Composable
+fun AddWalletDialog(
+    onDismiss: () -> Unit,
+    onSave: (String, Double) -> Unit
+) {
+    var name by remember { mutableStateOf("") }
+    var initialBalanceText by remember { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Add Wallet") },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("Wallet Name") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = initialBalanceText,
+                    onValueChange = { input ->
+                        val filtered = input.filterIndexed { index, char ->
+                            char.isDigit() || (char == '.' && input.indexOf('.') == index) || (char == '-' && index == 0)
+                        }
+                        initialBalanceText = filtered
+                    },
+                    label = { Text("Initial Balance") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            val balance = initialBalanceText.toDoubleOrNull() ?: 0.0
+            Button(
+                onClick = {
+                    if (name.isNotBlank()) {
+                        onSave(name.trim(), balance)
+                    }
+                },
+                enabled = name.isNotBlank()
+            ) {
+                Text("Add")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
+}
+
+@Composable
+fun EditWalletDialog(
+    account: AccountEntity,
+    onDismiss: () -> Unit,
+    onSave: (AccountEntity) -> Unit,
+    onDelete: (AccountEntity) -> Unit
+) {
+    var name by remember { mutableStateOf(account.name) }
+    var initialBalanceText by remember { mutableStateOf(if (account.initialBalance % 1.0 == 0.0) account.initialBalance.toLong().toString() else account.initialBalance.toString()) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Edit Wallet") },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("Wallet Name") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = initialBalanceText,
+                    onValueChange = { input ->
+                        val filtered = input.filterIndexed { index, char ->
+                            char.isDigit() || (char == '.' && input.indexOf('.') == index) || (char == '-' && index == 0)
+                        }
+                        initialBalanceText = filtered
+                    },
+                    label = { Text("Initial Balance") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            val balance = initialBalanceText.toDoubleOrNull() ?: account.initialBalance
+            Row {
+                TextButton(
+                    onClick = { onDelete(account) },
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text("Delete")
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                Button(
+                    onClick = {
+                        if (name.isNotBlank()) {
+                            onSave(account.copy(name = name.trim(), initialBalance = balance))
+                        }
+                    },
+                    enabled = name.isNotBlank()
+                ) {
+                    Text("Save")
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
+}
+
+@Composable
+fun DeleteWalletDialog(
+    account: AccountEntity,
+    accounts: List<AccountEntity>,
+    onDismiss: () -> Unit,
+    onConfirmDelete: (WalletDeletionMode, Int?, String?) -> Unit
+) {
+    val remainingAccounts = accounts.filter { it.id != account.id }
+    var selectedMode by remember { mutableStateOf(WalletDeletionMode.DELETE_EVERYTHING) }
+    var selectedTargetId by remember { mutableIntStateOf(remainingAccounts.firstOrNull()?.id ?: 0) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Delete '${account.name}'?") },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Text("Choose what happens to transactions and balance in this wallet:")
+                Spacer(modifier = Modifier.height(12.dp))
+
+                if (remainingAccounts.isNotEmpty()) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { selectedMode = WalletDeletionMode.MOVE_TRANSACTIONS_AND_BALANCE }
+                    ) {
+                        RadioButton(
+                            selected = selectedMode == WalletDeletionMode.MOVE_TRANSACTIONS_AND_BALANCE,
+                            onClick = { selectedMode = WalletDeletionMode.MOVE_TRANSACTIONS_AND_BALANCE }
+                        )
+                        Text("Move transactions & balance to another wallet", style = MaterialTheme.typography.bodyMedium)
+                    }
+
+                    if (selectedMode == WalletDeletionMode.MOVE_TRANSACTIONS_AND_BALANCE) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        WalletSelector(accounts = remainingAccounts, selectedId = selectedTargetId) {
+                            selectedTargetId = it
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { selectedMode = WalletDeletionMode.MOVE_REMAINING_BALANCE_ONLY }
+                    ) {
+                        RadioButton(
+                            selected = selectedMode == WalletDeletionMode.MOVE_REMAINING_BALANCE_ONLY,
+                            onClick = { selectedMode = WalletDeletionMode.MOVE_REMAINING_BALANCE_ONLY }
+                        )
+                        Text("Move balance only, retain transactions", style = MaterialTheme.typography.bodyMedium)
+                    }
+
+                    if (selectedMode == WalletDeletionMode.MOVE_REMAINING_BALANCE_ONLY) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        WalletSelector(accounts = remainingAccounts, selectedId = selectedTargetId) {
+                            selectedTargetId = it
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+                }
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { selectedMode = WalletDeletionMode.DELETE_EVERYTHING }
+                    ) {
+                    RadioButton(
+                        selected = selectedMode == WalletDeletionMode.DELETE_EVERYTHING,
+                        onClick = { selectedMode = WalletDeletionMode.DELETE_EVERYTHING }
+                    )
+                    Text("Delete wallet & all its transactions", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    val targetId = if (selectedMode != WalletDeletionMode.DELETE_EVERYTHING) selectedTargetId else null
+                    onConfirmDelete(selectedMode, targetId, null)
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+            ) {
+                Text("Confirm Delete")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
+}
+
+@Composable
+fun CurrencyDialog(
+    currentCurrencySymbol: String,
+    onDismiss: () -> Unit,
+    onSelectCurrency: (String) -> Unit
+) {
+    val selectedCode = CurrencyManager.currencies.find { it.symbol == currentCurrencySymbol }?.code
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Select Currency") },
+        text = {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 400.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                items(
+                    items = CurrencyManager.currencies,
+                    key = { it.code }
+                ) { item ->
+                    val isSelected = (selectedCode != null && item.code == selectedCode) || item.symbol == currentCurrencySymbol
+                    Surface(
+                        onClick = { onSelectCurrency(item.code) },
+                        shape = RoundedCornerShape(12.dp),
+                        color = if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f) else Color.Transparent,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 8.dp, horizontal = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(
+                                selected = isSelected,
+                                onClick = { onSelectCurrency(item.code) }
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = item.displayName,
+                                style = MaterialTheme.typography.bodyLarge,
+                                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                                color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
+}
+
+@Composable
+fun ManageBudgetsDialog(
+    categoryBudgets: Map<String, Double>,
+    currencySymbol: String,
+    onDismiss: () -> Unit,
+    onSetBudget: (String, Double) -> Unit,
+    onRemoveBudget: (String) -> Unit
+) {
+    var selectedCategory by remember { mutableStateOf(CategoryUtils.expenseCategories.first()) }
+    var limitText by remember { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Manage Monthly Budgets") },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+            ) {
+                Text("Set Monthly Budget Limit", style = MaterialTheme.typography.titleSmall)
+                Spacer(modifier = Modifier.height(8.dp))
+                OptInFlowRow {
+                    CategoryUtils.expenseCategories.forEach { cat ->
+                        FilterChip(
+                            selected = selectedCategory == cat,
+                            onClick = {
+                                selectedCategory = cat
+                                limitText = categoryBudgets[cat]?.let { if (it % 1.0 == 0.0) it.toLong().toString() else it.toString() } ?: ""
+                            },
+                            label = { Text(cat) }
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(12.dp))
+
+                OutlinedTextField(
+                    value = limitText,
+                    onValueChange = { input ->
+                        val filtered = input.filterIndexed { index, char ->
+                            char.isDigit() || (char == '.' && input.indexOf('.') == index)
+                        }
+                        limitText = filtered
+                    },
+                    label = { Text("Monthly Limit ($currencySymbol)") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    if (categoryBudgets.containsKey(selectedCategory)) {
+                        TextButton(
+                            onClick = {
+                                onRemoveBudget(selectedCategory)
+                                limitText = ""
+                            },
+                            colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                        ) {
+                            Text("Remove")
+                        }
+                    }
+                    Button(
+                        onClick = {
+                            val limit = limitText.toDoubleOrNull()
+                            if (limit != null && limit > 0) {
+                                onSetBudget(selectedCategory, limit)
+                            }
+                        },
+                        enabled = limitText.toDoubleOrNull()?.let { it > 0 } == true
+                    ) {
+                        Text("Set Budget")
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+                HorizontalDivider()
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Text("Active Category Budgets", style = MaterialTheme.typography.titleSmall)
+                Spacer(modifier = Modifier.height(8.dp))
+                if (categoryBudgets.isEmpty()) {
+                    Text("No category budgets set.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                } else {
+                    categoryBudgets.forEach { (cat, limit) ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(cat, fontWeight = FontWeight.SemiBold)
+                            Text("$currencySymbol${String.format(Locale.US, "%.2f", limit)}", style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Close")
+            }
+        }
+    )
 }
